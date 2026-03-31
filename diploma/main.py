@@ -1,6 +1,10 @@
 import os
+from dotenv import load_dotenv
 import requests
 import time
+
+# Load .env if exists
+load_dotenv()
 
 
 ''' To DO:
@@ -74,9 +78,13 @@ def download_paper(paper, directory='papers', user_agent='requests/2.0.0'):
 def search_for_papers(query, result_limit=10, offset=0):
     if not query:
         return None
+
+    s2_api_key = os.getenv("S2_API_KEY")
+    headers = {"x-api-key": s2_api_key} if s2_api_key else {}
+
     response = requests.get(
         "https://api.semanticscholar.org/graph/v1/paper/search",
-        headers={},
+        headers=headers,
         params={
             "query": query,
             "limit": result_limit,
