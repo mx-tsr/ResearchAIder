@@ -1,1 +1,5 @@
 .env
+/diploma/__pycache__
+/venv
+/pdfs
+/logs
