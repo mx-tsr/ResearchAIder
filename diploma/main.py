@@ -3,7 +3,6 @@ from dotenv import load_dotenv
 import requests
 import time
 
-# Load .env if exists
 load_dotenv()
 
 
