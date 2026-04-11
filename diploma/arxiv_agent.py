@@ -8,6 +8,7 @@ from dataclasses import dataclass, asdict
 from typing import List, Optional
 from pathlib import Path
 import xml.etree.ElementTree as ET
+from llm_agent import get_response_from_llm
 
 ARXIV_API_URL = 'http://export.arxiv.org/api/query'  # базовый URL для запросов к arXiv API
 ARXIV_API_RATE_LIMIT_SEC = 3.0  # документация просит делать не чаще 1 запроса в 3 секунды
@@ -81,7 +82,7 @@ def format_search_query(topic, field='all'):
     return f"{field}:{query}"
 
 
-def expand_topic_queries(topic, extra_context=None, max_number_of_query_variants=5):
+def expand_topic_queries(topic, max_number_of_query_variants=7):
     expanded_queries = []
 
     # 1. Изначальный запрос пользователя
@@ -93,25 +94,20 @@ def expand_topic_queries(topic, extra_context=None, max_number_of_query_variants
     # 3. Поиск по аннотациям
     expanded_queries.append(format_search_query(topic, 'abs'))
 
-    # 4. Поиск по ключевым словам
-    default_terms = ['agentic system', 'science automation', 'research assistant', 'AI research agent', 'autonomous research']
-    if extra_context:
-        default_terms = extra_context + default_terms
+    # 4. Генерируем другие варианты запросов для семантического поиска
+    msg, _ = get_response_from_llm(
+        expand_topic_prompt.format(
+            topic=topic, 
+            max_number_of_query_variants=max_number_of_query_variants - 3  # вычитаем уже добавленные 3 варианта
+            ),
+        print_debug=False,
+        msg_history=None,
+        temperature=0.2
+    )
+    print(f'[DEBUG] Expanded queries from LLM:\n{msg}')
+    expanded_queries.extend(map(format_search_query, msg.rstrip().split('\n')[:max_number_of_query_variants - 3]))
 
-    for t in default_terms:
-        if len(expanded_queries) >= max_number_of_query_variants:
-            break
-        if t.lower() in topic.lower():
-            continue
-        expanded_queries.append(format_search_query(f'{topic} {t}'))
-
-    unique_expanded_queries = []
-    for q in expanded_queries:
-        if q not in unique_expanded_queries:
-            unique_expanded_queries.append(q)
-        if len(unique_expanded_queries) >= max_number_of_query_variants:
-            break
-    return unique_expanded_queries
+    return expanded_queries
 
 
 def search_arxiv(query, max_results=20, start=0, sort_by='relevance', sort_order='descending'):
@@ -221,3 +217,22 @@ def search_and_download_arxiv_papers(topic, num_of_papers=10, num_of_expanded_qu
         'pdf_paths': pdf_paths,
         'log_file': store_results,
     }
+
+
+expand_topic_prompt = ''' 
+Ты — помощник для семантического поиска научных статей на arXiv.
+Тебе дана тема научной статьи, по которой нужно осуществить поиск на arXiv: "{topic}".
+Твоя задача сформулировать {max_number_of_query_variants} вариантов запроса для поиска похожих и релевантных статей к исходной.
+Сформулированные тобой варианты должны быть тесно связаны с исходной темой. Обязательно используй разные формулировки, отличные друг от друга и от исхожной темы. 
+Используй искомую тему, синонимы, возможные области приминения, конкретные термины. Каждая тема должны быть формулирована в виде короткой фразы, не более 5-7 слов. Не используй сложные предложения, только ключевые слова и фразы.
+Из {max_number_of_query_variants} вариантов запросов делай 50% запросов на английском языке, и 50% на русском.
+Обязательно предоставь результат в виде списка, где каждая тема находится на новой строке. Не пиши никакого дополнительного текста, только список тем, без нумерации, пунктов и прочего форматирования. Общее количество тем должно быть ровно {max_number_of_query_variants}.
+'''
+
+
+if __name__ == "__main__":
+    test_topic = "мультиагентные системы автоматизации науки"
+    expanded_queries = expand_topic_queries(test_topic)
+    print("Расширенные запросы:")
+    for i, query in enumerate(expanded_queries, start=1):
+        print(f"{i}. {query}")
