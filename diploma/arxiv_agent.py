@@ -1,5 +1,3 @@
-
-import os
 import time
 import json
 import re
@@ -27,7 +25,7 @@ class ArxivPaper:
     source_url: str
 
 
-def _rate_limit_sleep(extra=0.2):
+def rate_limit_sleep(extra=0.2):
     time.sleep(ARXIV_API_RATE_LIMIT_SEC + extra)
 
 
@@ -106,9 +104,9 @@ def expand_topic_queries(topic, max_number_of_query_variants=7):
     )
     print(f'[DEBUG] Expanded queries from LLM:\n{msg}')
     expanded_queries.extend(map(format_search_query, msg.rstrip().split('\n')[:max_number_of_query_variants - 3]))
-
+    
     return expanded_queries
-
+    
 
 def search_arxiv(query, max_results=20, start=0, sort_by='relevance', sort_order='descending'):
     params = {
@@ -124,13 +122,15 @@ def search_arxiv(query, max_results=20, start=0, sort_by='relevance', sort_order
         raise RuntimeError(f'arXiv API returned status {response.status_code}: {response.text[:400]}')
 
     papers = parse_arxiv_atom(response.content)
-    _rate_limit_sleep()
+    rate_limit_sleep()
     return papers
 
 
-def get_set_number_of_papers(topic, num_of_papers=10, num_of_expanded_queries=5, papers_per_query=20, store_path=None):
+def get_set_number_of_papers(topic, num_of_selected_papers=10, total_num_of_papers=70, num_of_expanded_queries=7, papers_per_query=10, store_path=None):
     queries = expand_topic_queries(topic, max_number_of_query_variants=num_of_expanded_queries)
     seen = {}
+
+    print(f'[DEBUG] Expanded queries for topic "{topic}":\n' + '\n'.join(queries))
 
     search_log = {'topic': topic, 'queries': [], 'papers': []}
 
@@ -141,15 +141,56 @@ def get_set_number_of_papers(topic, num_of_papers=10, num_of_expanded_queries=5,
         for paper in entries:
             if paper.arxiv_id not in seen:
                 seen[paper.arxiv_id] = paper
-            if len(seen) >= num_of_papers:
+            if len(seen) >= total_num_of_papers:
                 break
 
-        if len(seen) >= num_of_papers:
+        if len(seen) >= total_num_of_papers:
             break
 
-    result = list(seen.values())[:num_of_papers]
+    all_papers = list(seen.values())
+    print(f'[DEBUG] Unique papers found: {all_papers}')
 
-    for p in result:
+    papers_titles_and_abstracts = "\n\n".join([
+        f"ID: {p.arxiv_id}\nTitle: {p.title}\nAbstract: {p.abstract[:500]}..." 
+        for p in all_papers])
+
+    print(f'[DEBUG] Papers and titles of unique papers for prompt: {papers_titles_and_abstracts}')
+
+    try:
+        top_papers, _ = get_response_from_llm(
+            select_top_papers_prompt.format(
+                topic=topic, 
+                top_k=num_of_selected_papers,
+                papers_text=papers_titles_and_abstracts
+            ),
+            print_debug=False,
+            msg_history=None,
+            temperature=0.1
+        )
+
+        print(f'[DEBUG] LLM selected top papers ids:\n{top_papers}')
+
+        selected_ids = top_papers.rstrip().split('\n')
+        selected_ids = [id.strip() for id in selected_ids if id.strip()][:num_of_selected_papers]
+
+        selected_papers = [seen.get(id) for id in selected_ids if id in seen]
+        selected_papers = [p for p in selected_papers if p is not None]
+
+        print(f'[DEBUG] Selected papers: {[p.arxiv_id for p in selected_papers]}')
+
+    except Exception as e:
+        print(f'[WARNING] LLM selection failed: {e}. Selecting first {num_of_selected_papers} papers.')
+        selected_papers = all_papers[:num_of_selected_papers]
+
+    # Если LLM выбрал меньше, дополняем первыми из списка
+    while len(selected_papers) < num_of_selected_papers and all_papers:
+        next_paper = next((p for p in all_papers if p not in selected_papers), None)
+        if next_paper:
+            selected_papers.append(next_paper)
+    
+    selected_papers = selected_papers[:num_of_selected_papers]
+
+    for p in selected_papers:
         search_log['papers'].append(asdict(p))
 
     # сохранение логов поиска
@@ -157,7 +198,7 @@ def get_set_number_of_papers(topic, num_of_papers=10, num_of_expanded_queries=5,
         with open(store_path, 'w', encoding='utf-8') as f:
             json.dump(search_log, f, ensure_ascii=False, indent=2)
 
-    return result
+    return selected_papers
 
 
 def download_pdf(arxiv_id_url, target_dir='pdfs', timeout=120):
@@ -185,7 +226,7 @@ def download_pdf(arxiv_id_url, target_dir='pdfs', timeout=120):
                 f.write(chunk)
 
     # после запроса выдерживаем ограичение в 3 секунды
-    _rate_limit_sleep()
+    rate_limit_sleep()
 
     return str(out_path)
 
@@ -201,10 +242,10 @@ def download_papers(papers, pdf_dir='pdfs'):
     return downloaded_files
 
 
-def search_and_download_arxiv_papers(topic, num_of_papers=10, num_of_expanded_queries=5, store_results='arxiv_search_log.json'):
+def search_and_download_arxiv_papers(topic, num_of_papers=10, num_of_expanded_queries=5, store_results='logs/arxiv_search_log.json'):
     """
     Основная функция: 
-    1. Расширение запросов (пока вместо семантического поиска), 
+    1. Расширение запросов, 
     2. Поиск статей, 
     3. Выбор 10, 
     4. Скачивание PDF
@@ -225,14 +266,32 @@ expand_topic_prompt = '''
 Твоя задача сформулировать {max_number_of_query_variants} вариантов запроса для поиска похожих и релевантных статей к исходной.
 Сформулированные тобой варианты должны быть тесно связаны с исходной темой. Обязательно используй разные формулировки, отличные друг от друга и от исхожной темы. 
 Используй искомую тему, синонимы, возможные области приминения, конкретные термины. Каждая тема должны быть формулирована в виде короткой фразы, не более 5-7 слов. Не используй сложные предложения, только ключевые слова и фразы.
-Из {max_number_of_query_variants} вариантов запросов делай 50% запросов на английском языке, и 50% на русском.
+Генерируй темы на английском языке.
 Обязательно предоставь результат в виде списка, где каждая тема находится на новой строке. Не пиши никакого дополнительного текста, только список тем, без нумерации, пунктов и прочего форматирования. Общее количество тем должно быть ровно {max_number_of_query_variants}.
+'''
+
+select_top_papers_prompt = '''
+Тебе дана тема: "{topic}"
+
+Выбери топ {top_k} самых релевантных статей из следующего списка, основываясь на их названиях и аннотациях.
+Учитывай релевантность теме, новизну и научную ценность.
+
+Возвращай ТОЛЬКО arxiv_ids выбранных тобой статей, по одному на каждой строке, в порядке релевантности (самые релевантные первыми). Сохраняй в arxiv_id приписку версии, если она есть (например, 1234.5678v2), так как она важна для идентификации статьи. 
+Не пиши никакого дополнительного текста, только список IDs, без нумерации, пунктов и прочего форматирования и поясняющего текста. 
+
+Статьи для выбора:
+{papers_text}
 '''
 
 
 if __name__ == "__main__":
     test_topic = "мультиагентные системы автоматизации науки"
-    expanded_queries = expand_topic_queries(test_topic)
-    print("Расширенные запросы:")
-    for i, query in enumerate(expanded_queries, start=1):
-        print(f"{i}. {query}")
+    # expanded_queries = expand_topic_queries(test_topic)
+    # print("Расширенные запросы:")
+    # for i, query in enumerate(expanded_queries, start=1):
+    #     print(f"{i}. {query}")
+
+    selected_papers = get_set_number_of_papers(test_topic, num_of_selected_papers=10, total_num_of_papers=70, num_of_expanded_queries=7, papers_per_query=10, store_path='logs/test_arxiv_search_log.json')
+    print(f"Выбранные статьи по теме '{test_topic}': ")
+    for paper in selected_papers:
+        print(f" - {paper.arxiv_id}: {paper.title}\n  Abstract: {paper.abstract}\n")

@@ -1,14 +1,13 @@
 import os
-import requests
-import json
 import re
+import time
 import backoff
 from dotenv import load_dotenv
 from openai import OpenAI, RateLimitError, APITimeoutError, APIError
 
 load_dotenv()
 
-
+ARXIV_API_RATE_LIMIT_SEC = 3.0 
 MAX_NUM_TOKENS = 4096
 OPENROUTER_API_BASE_URL = os.getenv("OPENROUTER_API_BASE_URL")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -99,5 +98,7 @@ def get_response_from_llm(
         print(content)
         print("*" * 21 + " LLM END " + "*" * 21)
         print()
+    
+    time.sleep(ARXIV_API_RATE_LIMIT_SEC)
     
     return content, new_msg_history 
