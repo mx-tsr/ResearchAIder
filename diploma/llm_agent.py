@@ -88,6 +88,8 @@ def get_response_from_llm(
         elif "404" in str(e):
             print(f"Модель '{OPENROUTER_MODEL}' не найдена")
         raise
+    
+    print(f'[DEBUG] получен ответ от LLM: {content[:100]}...')  
 
     if print_debug:
         print()

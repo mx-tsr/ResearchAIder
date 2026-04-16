@@ -82,29 +82,20 @@ def format_search_query(topic, field='all'):
 
 def expand_topic_queries(topic, max_number_of_query_variants=7):
     expanded_queries = []
-
-    # 1. Изначальный запрос пользователя
     expanded_queries.append(format_search_query(topic, 'all'))
 
-    # 2. Поиск по заголовкам
-    expanded_queries.append(format_search_query(topic, 'ti'))
-
-    # 3. Поиск по аннотациям
-    expanded_queries.append(format_search_query(topic, 'abs'))
-
-    # 4. Генерируем другие варианты запросов для семантического поиска
+    # Генерируем другие варианты запросов для семантического поиска
     msg, _ = get_response_from_llm(
         expand_topic_prompt.format(
             topic=topic, 
-            max_number_of_query_variants=max_number_of_query_variants - 3  # вычитаем уже добавленные 3 варианта
+            max_number_of_query_variants=max_number_of_query_variants - 1
             ),
         print_debug=False,
         msg_history=None,
         temperature=0.2
     )
-    print(f'[DEBUG] Expanded queries from LLM:\n{msg}')
-    expanded_queries.extend(map(format_search_query, msg.rstrip().split('\n')[:max_number_of_query_variants - 3]))
-    
+
+    expanded_queries.extend(map(format_search_query, msg.rstrip().split('\n')[:max_number_of_query_variants - 1]))
     return expanded_queries
     
 
@@ -119,7 +110,7 @@ def search_arxiv(query, max_results=20, start=0, sort_by='relevance', sort_order
 
     response = requests.get(ARXIV_API_URL, params=params, timeout=30)
     if response.status_code != 200:
-        raise RuntimeError(f'arXiv API returned status {response.status_code}: {response.text[:400]}')
+        raise RuntimeError(f'[ERROR] arXiv API вернуло статус {response.status_code}: {response.text[:400]}')
 
     papers = parse_arxiv_atom(response.content)
     rate_limit_sleep()
@@ -127,15 +118,21 @@ def search_arxiv(query, max_results=20, start=0, sort_by='relevance', sort_order
 
 
 def get_set_number_of_papers(topic, num_of_selected_papers=10, total_num_of_papers=70, num_of_expanded_queries=7, papers_per_query=10, store_path=None):
+    
+    print(f'[DEBUG] Начинаю расширение исходной темы.')
+    
     queries = expand_topic_queries(topic, max_number_of_query_variants=num_of_expanded_queries)
     seen = {}
 
-    print(f'[DEBUG] Expanded queries for topic "{topic}":\n' + '\n'.join(queries))
-
+    print(f'[DEBUG] Расширенные запросы":\n' + '\n'.join(queries) + '\n')
     search_log = {'topic': topic, 'queries': [], 'papers': []}
 
     for query in queries:
+        print(f'[DEBUG] Начинаю поиск статей по запросу: {query}')
+
         entries = search_arxiv(query, max_results=papers_per_query)
+
+        print(f'[DEBUG] Нашел всего {len(entries)} статей \n')
         search_log['queries'].append({'query': query, 'found': len(entries)})
 
         for paper in entries:
@@ -148,13 +145,11 @@ def get_set_number_of_papers(topic, num_of_selected_papers=10, total_num_of_pape
             break
 
     all_papers = list(seen.values())
-    print(f'[DEBUG] Unique papers found: {all_papers}')
+    print(f'[DEBUG] Всего найдено {len(all_papers)} уникальных статей\n')
 
     papers_titles_and_abstracts = "\n\n".join([
         f"ID: {p.arxiv_id}\nTitle: {p.title}\nAbstract: {p.abstract[:500]}..." 
         for p in all_papers])
-
-    print(f'[DEBUG] Papers and titles of unique papers for prompt: {papers_titles_and_abstracts}')
 
     try:
         top_papers, _ = get_response_from_llm(
@@ -168,18 +163,16 @@ def get_set_number_of_papers(topic, num_of_selected_papers=10, total_num_of_pape
             temperature=0.1
         )
 
-        print(f'[DEBUG] LLM selected top papers ids:\n{top_papers}')
-
         selected_ids = top_papers.rstrip().split('\n')
         selected_ids = [id.strip() for id in selected_ids if id.strip()][:num_of_selected_papers]
 
         selected_papers = [seen.get(id) for id in selected_ids if id in seen]
         selected_papers = [p for p in selected_papers if p is not None]
 
-        print(f'[DEBUG] Selected papers: {[p.arxiv_id for p in selected_papers]}')
+        print(f'[DEBUG] LLM выбрала {len(selected_papers)} arxiv_id статей:\n {[p.arxiv_id for p in selected_papers]}\n')
 
     except Exception as e:
-        print(f'[WARNING] LLM selection failed: {e}. Selecting first {num_of_selected_papers} papers.')
+        print(f'[ERROR] LLM не смогла выбрать статьи: {e}. Берутся первые {num_of_selected_papers} статей.')
         selected_papers = all_papers[:num_of_selected_papers]
 
     # Если LLM выбрал меньше, дополняем первыми из списка
@@ -196,6 +189,7 @@ def get_set_number_of_papers(topic, num_of_selected_papers=10, total_num_of_pape
     # сохранение логов поиска
     if store_path:
         with open(store_path, 'w', encoding='utf-8') as f:
+            f.write(f'Лог поиска для темы "{topic}", запущен в {time.strftime("%Y-%m-%d %H:%M:%S")}\n\n')
             json.dump(search_log, f, ensure_ascii=False, indent=2)
 
     return selected_papers
@@ -212,18 +206,26 @@ def download_pdf(arxiv_id_url, target_dir='pdfs', timeout=120):
     pdf_url = f'https://arxiv.org/pdf/{arxiv_id}.pdf'
     out_path = target_dir / f'{arxiv_id}.pdf'
 
+    print(f'[DEBUG] Начинаю скачивание PDF для {arxiv_id}')
+
     #  если файл уже существует и его размер больше 1KB, считаем, что он уже скачан
     if out_path.exists() and out_path.stat().st_size > 1024:
+        print(f'[DEBUG] Файл {arxiv_id} уже существует, пропускаю скачивание.')
+
         return str(out_path)
 
     response = requests.get(pdf_url, stream=True, timeout=timeout)
     if response.status_code != 200:
-        raise RuntimeError(f'Failed download {pdf_url}: {response.status_code}')
+        raise RuntimeError(f'[ERROR] Не удалось скачать {pdf_url}: {response.status_code}')
+    
+    print(f'[DEBUG] Получен ответ от сервера {response.status_code}. Начинаю запись файла.')
 
     with open(out_path, 'wb') as f:
         for chunk in response.iter_content(chunk_size=8192):
             if chunk:
                 f.write(chunk)
+
+    print(f'[DEBUG] Файл {arxiv_id} успешно скачан и сохранен в {out_path}')
 
     # после запроса выдерживаем ограичение в 3 секунды
     rate_limit_sleep()
@@ -237,12 +239,12 @@ def download_papers(papers, pdf_dir='pdfs'):
         try:
             path = download_pdf(paper.arxiv_id, target_dir=pdf_dir)
             downloaded_files.append(path)
-        except Exception as ex:
-            print(f'[WARNING] Could not download {paper.arxiv_id}: {ex}')
+        except Exception as e:
+            print(f'[ERROR] Не смог скачать {paper.arxiv_id}: {e}')
     return downloaded_files
 
 
-def search_and_download_arxiv_papers(topic, num_of_papers=10, num_of_expanded_queries=5, store_results='logs/arxiv_search_log.json'):
+def search_and_download_arxiv_papers(topic, num_of_selected_papers=10, total_num_of_papers=70, num_of_expanded_queries=5, store_results='logs/arxiv_search_log.json'):
     """
     Основная функция: 
     1. Расширение запросов, 
@@ -250,8 +252,16 @@ def search_and_download_arxiv_papers(topic, num_of_papers=10, num_of_expanded_qu
     3. Выбор 10, 
     4. Скачивание PDF
     """
-    papers = get_set_number_of_papers(topic, num_of_papers=num_of_papers, num_of_expanded_queries=num_of_expanded_queries, store_path=store_results)
+    print(f'[DEBUG] Начинаю поиск заданного числа статей' + '\n')
+
+    papers = get_set_number_of_papers(topic, num_of_selected_papers=num_of_selected_papers, total_num_of_papers=total_num_of_papers, num_of_expanded_queries=num_of_expanded_queries, store_path=store_results)
+    
+    print(f'[DEBUG] Начинаю скачивание статей' + '\n')
+    
     pdf_paths = download_papers(papers, pdf_dir='pdfs')
+
+    print(f'[DEBUG] Статьи скачаны' + '\n')
+
     return {
         'topic': topic,
         'selected_papers': [asdict(p) for p in papers],
@@ -285,13 +295,14 @@ select_top_papers_prompt = '''
 
 
 if __name__ == "__main__":
-    test_topic = "мультиагентные системы автоматизации науки"
+    test_topic = 'multiagent systems of science automation'
     # expanded_queries = expand_topic_queries(test_topic)
     # print("Расширенные запросы:")
     # for i, query in enumerate(expanded_queries, start=1):
     #     print(f"{i}. {query}")
 
     selected_papers = get_set_number_of_papers(test_topic, num_of_selected_papers=10, total_num_of_papers=70, num_of_expanded_queries=7, papers_per_query=10, store_path='logs/test_arxiv_search_log.json')
-    print(f"Выбранные статьи по теме '{test_topic}': ")
+    
+    print(f'Выбранные статьи по теме "{test_topic}": ')
     for paper in selected_papers:
-        print(f" - {paper.arxiv_id}: {paper.title}\n  Abstract: {paper.abstract}\n")
+        print(f' - {paper.arxiv_id}: {paper.title}\n  Abstract: {paper.abstract}\n')
