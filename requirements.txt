@@ -2,3 +2,4 @@ requests
 dotenv
 backoff
 openai
+hashlib

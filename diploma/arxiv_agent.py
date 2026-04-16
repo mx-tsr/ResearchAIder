@@ -1,3 +1,6 @@
+from datetime import datetime, timedelta
+import hashlib
+import os
 import time
 import json
 import re
@@ -10,7 +13,8 @@ from llm_agent import get_response_from_llm
 
 ARXIV_API_URL = 'http://export.arxiv.org/api/query'  # базовый URL для запросов к arXiv API
 ARXIV_API_RATE_LIMIT_SEC = 3.0  # документация просит делать не чаще 1 запроса в 3 секунды
-
+CACHE_FILE = 'cache/arxiv_cache.json'  # файл для кэширования результатов запросов к arXiv
+CACHE_ARXIV_TTL = 24
 
 @dataclass
 class ArxivPaper:
@@ -27,6 +31,23 @@ class ArxivPaper:
 
 def rate_limit_sleep(extra=0.2):
     time.sleep(ARXIV_API_RATE_LIMIT_SEC + extra)
+
+
+def get_topic_hash(topic):
+    return hashlib.md5(topic.lower().strip().encode()).hexdigest()
+
+
+def load_cache():
+    if os.path.exists(CACHE_FILE):
+        with open(CACHE_FILE, 'r') as f:
+            return json.load(f)
+    return {}
+
+
+def save_cache(cache):
+    os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
+    with open(CACHE_FILE, 'w') as f:
+        json.dump(cache, f, indent=2)
 
 
 def get_arxiv_id_from_url(arxiv_id_url):
@@ -92,7 +113,7 @@ def expand_topic_queries(topic, max_number_of_query_variants=7):
             ),
         print_debug=False,
         msg_history=None,
-        temperature=0.2
+        temperature=0.1
     )
 
     expanded_queries.extend(map(format_search_query, msg.rstrip().split('\n')[:max_number_of_query_variants - 1]))
@@ -118,6 +139,21 @@ def search_arxiv(query, max_results=20, start=0, sort_by='relevance', sort_order
 
 
 def get_set_number_of_papers(topic, num_of_selected_papers=10, total_num_of_papers=70, num_of_expanded_queries=7, papers_per_query=10, store_path=None):
+    print(f'[DEBUG] Проверяю нет ли исходной темы в кэше.')
+    
+    cache = load_cache()
+    topic_hash = get_topic_hash(topic)
+    now = datetime.now()
+
+    if topic_hash in cache:
+        cached_time = datetime.fromtimestamp(cache[topic_hash]['timestamp'])
+        if now - cached_time < timedelta(hours=CACHE_ARXIV_TTL):
+            print('[DEBUG] Найден кэш для темы, полученный в течение последних 24 часов, возвращаю его.\n')
+            return cache[topic_hash]['selected_papers']
+        else:
+            print('[DEBUG] Найден кэш для темы, но он был получен более 24 часов назад. Обновляю его.\n') 
+    else:
+        print(f'[DEBUG] Кэш для темы не найден.\n')
     
     print(f'[DEBUG] Начинаю расширение исходной темы.')
     
@@ -191,6 +227,14 @@ def get_set_number_of_papers(topic, num_of_selected_papers=10, total_num_of_pape
         with open(store_path, 'w', encoding='utf-8') as f:
             f.write(f'Лог поиска для темы "{topic}", запущен в {time.strftime("%Y-%m-%d %H:%M:%S")}\n\n')
             json.dump(search_log, f, ensure_ascii=False, indent=2)
+    
+    cache[topic_hash] = {
+        'timestamp': now.timestamp(),
+        'queries': queries,
+        'papers': [asdict(p) for p in all_papers],
+        'selected_papers': [asdict(p) for p in selected_papers]
+    }
+    save_cache(cache)
 
     return selected_papers
 
@@ -282,10 +326,8 @@ expand_topic_prompt = '''
 
 select_top_papers_prompt = '''
 Тебе дана тема: "{topic}"
-
 Выбери топ {top_k} самых релевантных статей из следующего списка, основываясь на их названиях и аннотациях.
 Учитывай релевантность теме, новизну и научную ценность.
-
 Возвращай ТОЛЬКО arxiv_ids выбранных тобой статей, по одному на каждой строке, в порядке релевантности (самые релевантные первыми). Сохраняй в arxiv_id приписку версии, если она есть (например, 1234.5678v2), так как она важна для идентификации статьи. 
 Не пиши никакого дополнительного текста, только список IDs, без нумерации, пунктов и прочего форматирования и поясняющего текста. 
 
@@ -305,4 +347,4 @@ if __name__ == "__main__":
     
     print(f'Выбранные статьи по теме "{test_topic}": ')
     for paper in selected_papers:
-        print(f' - {paper.arxiv_id}: {paper.title}\n  Abstract: {paper.abstract}\n')
+        print(f' - {paper["arxiv_id"]}:\n {paper["title"]}\n\nAbstract: {paper["abstract"]}\n\n')
