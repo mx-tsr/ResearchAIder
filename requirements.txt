@@ -2,4 +2,7 @@ requests
 dotenv
 backoff
 openai
-hashlib
+pymupdf4llm
+PdfReader
+pymupdf
+PyPDF2

@@ -1,4 +1,7 @@
 from datetime import datetime, timedelta
+import pymupdf4llm
+from PyPDF2 import PdfReader
+import pymupdf
 import hashlib
 import os
 import time
@@ -27,6 +30,20 @@ class ArxivPaper:
     doi: Optional[str]
     pdf_url: str
     source_url: str
+
+
+def arxiv_paper_from_dict(data):
+    return ArxivPaper(
+        arxiv_id=data.get('arxiv_id', ''),
+        title=data.get('title', ''),
+        abstract=data.get('abstract', ''),
+        authors=data.get('authors', []),
+        published=data.get('published', ''),
+        updated=data.get('updated', ''),
+        doi=data.get('doi'),
+        pdf_url=data.get('pdf_url', ''),
+        source_url=data.get('source_url', ''),
+    )
 
 
 def rate_limit_sleep(extra=0.2):
@@ -148,8 +165,9 @@ def get_set_number_of_papers(topic, num_of_selected_papers=10, total_num_of_pape
     if topic_hash in cache:
         cached_time = datetime.fromtimestamp(cache[topic_hash]['timestamp'])
         if now - cached_time < timedelta(hours=CACHE_ARXIV_TTL):
-            print('[DEBUG] Найден кэш для темы, полученный в течение последних 24 часов, возвращаю его.\n')
-            return cache[topic_hash]['selected_papers']
+            selected_papers = [arxiv_paper_from_dict(p) for p in cache[topic_hash]['selected_papers']]
+            print(f'[DEBUG] Найден кэш для темы, полученный в течение последних 24 часов, возвращаю его:\n {[p.arxiv_id for p in selected_papers][:1]} ...\n')
+            return selected_papers
         else:
             print('[DEBUG] Найден кэш для темы, но он был получен более 24 часов назад. Обновляю его.\n') 
     else:
@@ -271,7 +289,7 @@ def download_pdf(arxiv_id_url, target_dir='pdfs', timeout=120):
 
     print(f'[DEBUG] Файл {arxiv_id} успешно скачан и сохранен в {out_path}')
 
-    # после запроса выдерживаем ограичение в 3 секунды
+    # после запроса выдерживаем ограничение в 3 секунды
     rate_limit_sleep()
 
     return str(out_path)
@@ -286,6 +304,90 @@ def download_papers(papers, pdf_dir='pdfs'):
         except Exception as e:
             print(f'[ERROR] Не смог скачать {paper.arxiv_id}: {e}')
     return downloaded_files
+
+
+def format_pdf_text(text):
+    # Оставляем текст между Introduction и Acknowledgements
+    start_of_text = text.find('Introduction')
+    end_of_text = None
+
+    if text.find('Acknowledgements') != -1:
+        end_of_text = text.find('Acknowledgements')
+    elif text.find('Acknowledgement') != -1:
+        end_of_text = text.find('Acknowledgement')
+    elif text.find('References') != -1:
+        end_of_text = text.find('References')
+    
+    if end_of_text:
+        text = text[:end_of_text] 
+    text = text[start_of_text:]
+
+    # Удаляем обозначения картинок
+    text = re.sub(r'==> picture.*?<==', '', text, flags=re.DOTALL)
+    text = re.sub(r'----- Start of picture text -----.*?----- End of picture text -----', '', text, flags=re.DOTALL)
+
+    # Удаляем обозначения графиков
+    pattern = r'^(Figure|Fig\.)\s*\d+:.*$'
+    text = re.sub(pattern, '', text, flags=re.MULTILINE)
+
+    # Нормализуем пробелы
+    text = re.sub(r'\n\s*\n', '\n', text)  # убираем пустые строки
+    text = re.sub(r' +', ' ', text)  # множественные пробелы
+    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text) # ** с двух сторон
+
+    return text
+
+def extract_text_from_paper_pdf(pdf_path, min_size=100):
+    try:
+        text = pymupdf4llm.to_markdown(pdf_path)
+        if len(text) < min_size:
+            raise Exception("[ERROR] текст слишком короткий")
+    except Exception as e:
+        print(f"[ERROR] pymupdf4llm не смог извлечь текст, попытаюсь использовать pymupdf: {e}")
+        try:
+            doc = pymupdf.open(pdf_path)  
+            text = ""
+            for page in doc:  
+                text = text + page.get_text()  
+            if len(text) < min_size:
+                raise Exception("[ERROR] текст слишком короткий")
+        except Exception as e:
+            print(f"[ERROR] pymupdf не смог извлечь текст, попытаюсь использовать pypdf: {e}")
+            reader = PdfReader(pdf_path)
+            text = "".join(page.extract_text() for page in reader.pages)
+            if len(text) < min_size:
+                raise Exception("[ERROR] текст слишком короткий")
+
+    return text
+
+
+def extract_and_save_texts(papers, txt_dir='txts', pdf_dir='pdfs'):
+    txt_dir_path = Path(txt_dir)
+    txt_dir_path.mkdir(parents=True, exist_ok=True)
+    
+    txt_paths = []
+    for paper in papers:
+        pdf_path = Path(pdf_dir) / f"{paper.arxiv_id}.pdf"
+        if not pdf_path.exists():
+            print(f"[ERROR] PDF для {paper.arxiv_id} не найден")
+            continue
+
+        txt_path = txt_dir_path / f"{paper.arxiv_id}.txt"
+        if txt_path.exists() and txt_path.stat().st_size > 0:
+            print(f"[DEBUG] TXT для {paper.arxiv_id} уже существует, пропускаю извлечение")
+            txt_paths.append(str(txt_path))
+            continue
+        
+        text = extract_text_from_paper_pdf(str(pdf_path))
+        text = format_pdf_text(text)
+        
+        with open(txt_path, 'w', encoding='utf-8') as f:
+            f.write(text)
+        
+        txt_paths.append(str(txt_path))
+        print(f"[DEBUG] Текст для {paper.arxiv_id} сохранён в {txt_path}")
+    
+    return txt_paths
 
 
 def search_and_download_arxiv_papers(topic, num_of_selected_papers=10, total_num_of_papers=70, num_of_expanded_queries=5, store_results='logs/arxiv_search_log.json'):
@@ -304,12 +406,17 @@ def search_and_download_arxiv_papers(topic, num_of_selected_papers=10, total_num
     
     pdf_paths = download_papers(papers, pdf_dir='pdfs')
 
-    print(f'[DEBUG] Статьи скачаны' + '\n')
+    print(f'\n[DEBUG] Статьи скачаны. Начинаю извлечение текста из PDF' + '\n')
+
+    txt_paths = extract_and_save_texts(papers, txt_dir='txts', pdf_dir='pdfs')
+
+    print(f'[DEBUG] Тексты извлечены и сохранены' + '\n')
 
     return {
         'topic': topic,
-        'selected_papers': [asdict(p) for p in papers],
+        'selected_papers': papers,
         'pdf_paths': pdf_paths,
+        'txt_paths': txt_paths,
         'log_file': store_results,
     }
 
@@ -337,14 +444,21 @@ select_top_papers_prompt = '''
 
 
 if __name__ == "__main__":
-    test_topic = 'multiagent systems of science automation'
+    # test_topic = 'multiagent systems of science automation'
     # expanded_queries = expand_topic_queries(test_topic)
     # print("Расширенные запросы:")
     # for i, query in enumerate(expanded_queries, start=1):
     #     print(f"{i}. {query}")
 
-    selected_papers = get_set_number_of_papers(test_topic, num_of_selected_papers=10, total_num_of_papers=70, num_of_expanded_queries=7, papers_per_query=10, store_path='logs/test_arxiv_search_log.json')
+    # selected_papers = get_set_number_of_papers(test_topic, num_of_selected_papers=10, total_num_of_papers=70, num_of_expanded_queries=7, papers_per_query=10, store_path='logs/test_arxiv_search_log.json')
     
-    print(f'Выбранные статьи по теме "{test_topic}": ')
-    for paper in selected_papers:
-        print(f' - {paper["arxiv_id"]}:\n {paper["title"]}\n\nAbstract: {paper["abstract"]}\n\n')
+    # print(f'Выбранные статьи по теме "{test_topic}": ')
+    # for paper in selected_papers:
+    #     print(f' - {paper["arxiv_id"]}:\n {paper["title"]}\n\nAbstract: {paper["abstract"]}\n\n')
+
+
+    # text = extract_text_from_paper_pdf('pdfs/2502.17506v3.pdf')
+    # text = format_pdf_text(text)
+    # print(text)
+
+    search_and_download_arxiv_papers('multiagent systems of science automation', num_of_selected_papers=10, total_num_of_papers=70, num_of_expanded_queries=7, store_results='logs/test_arxiv_search_log.json')
