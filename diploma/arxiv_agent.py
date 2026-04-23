@@ -382,6 +382,7 @@ def extract_and_save_texts(papers, txt_dir='txts', pdf_dir='pdfs'):
         text = format_pdf_text(text)
         
         with open(txt_path, 'w', encoding='utf-8') as f:
+            f.write(paper.title + "\n\n")
             f.write(text)
         
         txt_paths.append(str(txt_path))
@@ -443,7 +444,7 @@ select_top_papers_prompt = '''
 '''
 
 
-if __name__ == "__main__":
+# if __name__ == "__main__":
     # test_topic = 'multiagent systems of science automation'
     # expanded_queries = expand_topic_queries(test_topic)
     # print("Расширенные запросы:")
@@ -461,4 +462,4 @@ if __name__ == "__main__":
     # text = format_pdf_text(text)
     # print(text)
 
-    search_and_download_arxiv_papers('multiagent systems of science automation', num_of_selected_papers=10, total_num_of_papers=70, num_of_expanded_queries=7, store_results='logs/test_arxiv_search_log.json')
+    # search_and_download_arxiv_papers('multiagent systems of science automation', num_of_selected_papers=10, total_num_of_papers=70, num_of_expanded_queries=7, store_results='logs/test_arxiv_search_log.json')
