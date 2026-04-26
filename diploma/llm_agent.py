@@ -8,17 +8,44 @@ from openai import OpenAI, RateLimitError, APITimeoutError, APIError
 load_dotenv()
 
 OPENROUTER_API_RATE_LIMIT_SEC = 3.0 
-MAX_NUM_TOKENS = 4096
+MAX_NUM_TOKENS = 16384
 OPENROUTER_API_BASE_URL = os.getenv("OPENROUTER_API_BASE_URL")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL")
-OPENROUTER_API_BASE_URL_FALLBACK = os.getenv("OPENROUTER_API_BASE_URL_FALLBACK")
-OPENROUTER_API_KEY_FALLBACK = os.getenv("OPENROUTER_API_KEY_FALLBACK")
+
+OPENROUTER_API_BASE_URL_FALLBACK_1 = os.getenv("OPENROUTER_API_BASE_URL_FALLBACK_1")
+OPENROUTER_API_KEY_FALLBACK_1 = os.getenv("OPENROUTER_API_KEY_FALLBACK_1")
+OPENROUTER_MODEL_FALLBACK_1 = os.getenv("OPENROUTER_MODEL_FALLBACK_1")
+
+OPENROUTER_API_BASE_URL_FALLBACK_2 = os.getenv("OPENROUTER_API_BASE_URL_FALLBACK_2")
+OPENROUTER_API_KEY_FALLBACK_2 = os.getenv("OPENROUTER_API_KEY_FALLBACK_2")
+OPENROUTER_MODEL_FALLBACK_2 = os.getenv("OPENROUTER_MODEL_FALLBACK_2")
+
+OPENROUTER_API_BASE_URL_FALLBACK_3 = os.getenv("OPENROUTER_API_BASE_URL_FALLBACK_3")
+OPENROUTER_API_KEY_FALLBACK_3 = os.getenv("OPENROUTER_API_KEY_FALLBACK_3")
+OPENROUTER_MODEL_FALLBACK_3 = os.getenv("OPENROUTER_MODEL_FALLBACK_3")
+
+OPENROUTER_API_BASE_URL_FALLBACK_4 = os.getenv("OPENROUTER_API_BASE_URL_FALLBACK_4")
+OPENROUTER_API_KEY_FALLBACK_4 = os.getenv("OPENROUTER_API_KEY_FALLBACK_4")
+OPENROUTER_MODEL_FALLBACK_4 = os.getenv("OPENROUTER_MODEL_FALLBACK_4")
+
+MODELLGATE_API_BASE_URL = os.getenv("MODELLGATE_API_BASE_URL")
+MODELLGATE_API_KEY = os.getenv("MODELLGATE_API_KEY")
+MODELLGATE_MODEL = os.getenv("MODELLGATE_MODEL")
 
 # Список API конфигураций: [(key, url), ...]
-OPENROUTER_APIS = [(OPENROUTER_API_KEY, OPENROUTER_API_BASE_URL)]
-if OPENROUTER_API_KEY_FALLBACK and OPENROUTER_API_BASE_URL_FALLBACK:
-    OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK, OPENROUTER_API_BASE_URL_FALLBACK))
+OPENROUTER_APIS = [(OPENROUTER_API_KEY, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL)]
+if OPENROUTER_API_KEY_FALLBACK_1 and OPENROUTER_API_BASE_URL_FALLBACK_1:
+    OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_1, OPENROUTER_API_BASE_URL_FALLBACK_1, OPENROUTER_MODEL_FALLBACK_1))
+if OPENROUTER_API_KEY_FALLBACK_2 and OPENROUTER_API_BASE_URL_FALLBACK_2:
+    OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_2, OPENROUTER_API_BASE_URL_FALLBACK_2, OPENROUTER_MODEL_FALLBACK_2))
+if OPENROUTER_API_KEY_FALLBACK_3 and OPENROUTER_API_BASE_URL_FALLBACK_3:
+    OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_3, OPENROUTER_API_BASE_URL_FALLBACK_3, OPENROUTER_MODEL_FALLBACK_3))
+if OPENROUTER_API_KEY_FALLBACK_4 and OPENROUTER_API_BASE_URL_FALLBACK_4:
+    OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_4, OPENROUTER_API_BASE_URL_FALLBACK_4, OPENROUTER_MODEL_FALLBACK_4))
+if MODELLGATE_API_KEY and MODELLGATE_API_BASE_URL:
+    OPENROUTER_APIS.append((MODELLGATE_API_KEY, MODELLGATE_API_BASE_URL, MODELLGATE_MODEL))
+
 
 if not OPENROUTER_API_KEY:
     raise EnvironmentError("OPENROUTER_API_KEY не установлен. Поместите его в .env или переменные окружения.")
@@ -26,6 +53,8 @@ if not OPENROUTER_API_BASE_URL:
     raise EnvironmentError("OPENROUTER_API_BASE_URL не установлен. Поместите его в .env или переменные окружения.")
 if not OPENROUTER_MODEL:
     raise EnvironmentError("OPENROUTER_MODEL не установлен. Поместите его в .env или переменные окружения.")
+
+API_DAILY_LIMIT_EXHAUSTED = [False] * len(OPENROUTER_APIS)
 
 
 def backoff_handler(details):
@@ -83,12 +112,16 @@ def get_response_from_llm(
     new_msg_history = msg_history + [{"role": "user", "content": msg}]
     last_error = None
 
-    for api_key, api_url in OPENROUTER_APIS:
+    for api_idx, (api_key, api_url, api_model) in enumerate(OPENROUTER_APIS):
+
+        if API_DAILY_LIMIT_EXHAUSTED[api_idx]:
+            continue
+
         try:
             content = call_llm_model(
                 api_key, 
                 api_url, 
-                OPENROUTER_MODEL, 
+                api_model, 
                 new_msg_history, 
                 temperature
             )
@@ -97,7 +130,7 @@ def get_response_from_llm(
                 content = clean_text(content)
             new_msg_history = new_msg_history + [{"role": "assistant", "content": content}]
 
-            print(f'[DEBUG] получен ответ от LLM (api={api_url}, model={OPENROUTER_MODEL}): {content}')
+            print(f'[DEBUG] получен ответ от LLM (idx={api_idx+1}, api={api_url}, model={api_model}):\n {"-"*50}\n {content}\n {"-"*50}\n')
             
             if print_debug:
                 print()
@@ -117,22 +150,13 @@ def get_response_from_llm(
             print(f"[ERROR] Rate limit 429 для API {api_url}: {e}")
             last_error = e
 
-            if "Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day" in str(e) and OPENROUTER_API_KEY_FALLBACK and OPENROUTER_API_BASE_URL_FALLBACK:
-                print("[DEBUG] Переключаюсь на fallback-API после исчерпания запросов основного API")
-                content = call_llm_model(
-                    OPENROUTER_API_KEY_FALLBACK,
-                    OPENROUTER_API_BASE_URL_FALLBACK,
-                    OPENROUTER_MODEL,
-                    new_msg_history,
-                    temperature
-                )
-            else:
-                raise
-
-            if (api_key, api_url) != OPENROUTER_APIS[-1]:
-                print(f"[DEBUG] Переключаюсь на fallback-API")
+            if "Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day" in str(e):
+                API_DAILY_LIMIT_EXHAUSTED[api_idx] = True
+                print(f"[DEBUG] API #{api_idx+1} исчерпал дневной лимит")
                 continue
-            raise
+            else:
+                # Другие RateLimitError обрабатываются через backoff
+                raise
 
         except APITimeoutError as e:
             print(f"[ERROR] API timeout для API {api_url}: {e}")

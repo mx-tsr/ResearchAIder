@@ -7,7 +7,7 @@ from pathlib import Path
 from arxiv_agent import ArxivPaper
 from llm_agent import get_response_from_llm
 
-OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC = 5.0 
+OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC = 7.0 
 
 def extract_json_from_response(response):
     """
@@ -54,7 +54,7 @@ def extract_key_info_from_paper(text, num_iterations=2):
             if extracted is None:
                 continue
             
-            check_msg = quality_check_prompt.format(
+            check_msg = extraction_quality_check_prompt.format(
                 extracted_json=json.dumps(extracted, indent=2)
             )
             
@@ -130,28 +130,85 @@ def load_extracted_info(papers, extracted_dir='extracted_info'):
 
 def group_papers_by_subtopics(papers_info, topic):
     """
-    Группирует статьи по подтемам с помощью LLM.
+    Группирует статьи по подтемам с помощью LLM с refinement.
     Возвращает словарь: {group_name: [paper_ids]}
     """
    
     papers_summary = []
     for paper in papers_info:
-        summary = f"Title: {paper['title']}\nProblem: {paper['problem']}\nMethod: {paper['method']}\nResults: {paper['results']}"
+        summary = f"Title: {paper['title']}\nProblem: {paper['problem']}\nCompared baselines: {paper['compared_baselines']}\nResults: {paper['results']}"
         papers_summary.append(f"Paper {paper['arxiv_id']}:\n{summary}")
     
     papers_summary_text = "\n\n".join(papers_summary)
-    print(f"[DEBUG] Сформирован текст для группировки статей по подтемам:\n{papers_summary_text}...")  
+    print(f"[DEBUG] Сформирован текст для группировки статей по подтемам:\n{papers_summary_text}\n")  
     
-    response, _ = get_response_from_llm(
-        msg=group_papers_by_subtopics_prompt.format(
-            topic=topic, 
-            papers_summary_text=papers_summary_text
-            ),
-        print_debug=False,
-        rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
-    )
+    groups = None
+    for iteration in range(2):  # 2 итерации refinement
+        if iteration == 0:
+            # Первичная группировка
+            response, _ = get_response_from_llm(
+                msg=group_papers_by_subtopics_prompt.format(
+                    topic=topic, 
+                    papers_summary_text=papers_summary_text
+                    ),
+                print_debug=False,
+                temperature=0.1,
+                rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
+            )
+            groups = extract_json_from_response(response)
+            print(f"[DEBUG] Результат первичной группировки: {groups}\n")
+        else:
+            # Проверка и улучшение
+            if groups is None:
+                continue
+            
+            # Проверяем распределение
+            all_paper_ids = set()
+            duplicates = []
+            for group_papers in groups.values():
+                for paper_id in group_papers:
+                    if paper_id in all_paper_ids:
+                        duplicates.append(paper_id)
+                    all_paper_ids.add(paper_id)
+            
+            expected_papers = {p['arxiv_id'] for p in papers_info}
+            missing = expected_papers - all_paper_ids
+            extra = all_paper_ids - expected_papers
+            
+            if not missing and not duplicates and not extra:
+                break  # Все хорошо
+            
+            # Фидбек для улучшения
+            feedback = ""
+            if missing:
+                feedback += f"Не распределены статьи: {list(missing)}. "
+            if duplicates:
+                feedback += f"Дубликаты статей: {duplicates}. "
+            if extra:
+                feedback += f"Лишние статьи: {list(extra)}. "
+            
+            print(f'[DEBUG] Фидбек для улучшения групп: {feedback}')
+            
+            improve_prompt = f"""
+Текущая группировка:
+{json.dumps(groups, indent=2)}
+
+Проблемы: {feedback}
+
+Исправь группировку: все статьи должны быть распределены ровно по одной группе без дубликатов. Суммарно групп должно быть не больше 4.
+
+Ответь только исправленным JSON.
+"""
+            
+            response, _ = get_response_from_llm(
+                msg=improve_prompt,
+                print_debug=False,
+                temperature=0.1,
+                rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
+            )
+            groups = extract_json_from_response(response)
+            print(f"[DEBUG] Результат повторной группировки: {groups}\n")
     
-    groups = extract_json_from_response(response)
     if not groups:
         print("[ERROR] Не удалось распарсить группы из ответа LLM")
         return {}
@@ -161,22 +218,22 @@ def group_papers_by_subtopics(papers_info, topic):
 
 def generate_group_analysis(papers_info, group_name, paper_ids, topic, num_iterations=3):
     """
-    Генерирует анализ для одной группы статей с итеративным улучшением.
+    Генерирует анализ для одной группы статей с итеративным улучшением (компактные промпты).
     """
     group_papers = [p for p in papers_info if p['arxiv_id'] in paper_ids]
     
     papers_text = []
     for paper in group_papers:
-        text = f"Title: {paper['title']}\nProblem: {paper['problem']}\nMethod: {paper['method']}\nResults: {paper['results']}\nLimitations: {paper['limitations']}\nNovelty: {paper['novelty']}\nkey_findings: {paper['key_findings']}\nopen_questions: {paper['open_questions']}"
+        text = f"Title: {paper['title']}\nProblem: {paper['problem']}\nCompared baselines: {paper['compared_baselines']}\nResults: {paper['results']}\nLimitations: {paper['limitations']}\nNovelty: {paper['novelty']}\nkey_findings: {paper['key_findings']}\nopen_questions: {paper['open_questions']}"
         papers_text.append(text)
     papers_combined = "\n\n".join(papers_text)
     
     analysis = None
-    msg_history = None
     
     for iteration in range(num_iterations):
         if iteration == 0:
             # Первичная генерация анализа
+            msg_history = []
             response, msg_history = get_response_from_llm(
                 msg=group_analysis_prompt.format(
                     group_name=group_name, 
@@ -184,20 +241,36 @@ def generate_group_analysis(papers_info, group_name, paper_ids, topic, num_itera
                     papers_combined=papers_combined
                 ),
                 print_debug=False,
+                msg_history=msg_history,
                 rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
             )
             analysis = response
         else:
-            # Проверка качества и улучшение
+            # Проверка качества
             if analysis is None:
                 continue
             
+            check_prompt = f"""
+Проверь анализ подтемы "{group_name}" на полноту, точность, согласованность, relevance к статьям, научную строгость и ясность структуры. Дай подробную обратную связь по любым слабым местам, несоответствиям или областям для улучшения.
+Проверь:
+1. Все ли статьи действительно отражены.
+2. Достаточно ли глубок анализ.
+3. Есть ли сравнение, противоречия и связи.
+4. Все ли утверждения имеют ссылки на статьи.
+5. Выявлены ли пробелы исследований.
+6. Достаточно ли качественный это промежуточный артефакт для итогового обзора.
+
+Анализ:
+{analysis}
+
+Резюме статей:
+{papers_combined}
+
+Если анализ хороший, ответь только "ПРИНЯТО". В противном случае, предоставь конкретные, действенные предложения для улучшения.
+"""
+            
             check_response, msg_history = get_response_from_llm(
-                msg=check_group_analysis_prompt.format(
-                    group_name=group_name,
-                    analysis=analysis,
-                    papers_combined=papers_combined
-                ),
+                msg=check_prompt,
                 print_debug=False,
                 msg_history=msg_history,
                 rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
@@ -206,14 +279,20 @@ def generate_group_analysis(papers_info, group_name, paper_ids, topic, num_itera
             if "ПРИНЯТО" in check_response.upper():
                 break
             else:
-                # Генерируем улучшенную версию            
-                response, msg_history = get_response_from_llm(
-                    msg=improve_group_analysis_prompt.format(
-                        group_name=group_name,
-                        check_response=check_response,
-                    ),
+                # Компактное улучшение
+                improve_prompt = f"""
+Вот текущий анализ подтемы "{group_name}":
+{analysis}
+
+Вот фидбек для улучшения:
+{check_response}
+
+Сделай новую исправленную версию анализа, учитывая фидбек. Сохрани сильные части, усиль слабые разделы, добавь недостающий сравнительный анализ, исправь ссылки на статьи, повышай ценность для итогового обзора.
+"""
+                
+                response, _ = get_response_from_llm(
+                    msg=improve_prompt,
                     print_debug=False,
-                    msg_history=msg_history,
                     rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
                 )
                 analysis = response
@@ -222,56 +301,151 @@ def generate_group_analysis(papers_info, group_name, paper_ids, topic, num_itera
 
 def generate_final_review(group_analyses, topic, num_iterations=3):
     """
-    Объединяет анализы групп в итоговый обзор статьи с итеративным улучшением.
+    Генерирует итоговый обзор статьи по фиксированным разделам с targeted контекстом.
     """
-    analyses_text = "\n\n".join([f"## {group_name}\n\n{analysis}" for group_name, analysis in group_analyses.items()])
+    # Фиксированные разделы финального обзора
+    sections = [
+        "Введение",
+        "Предметная область", 
+        "Методы и Подходы",
+        "Ключевые Результаты и Открытия",
+        "Ограничения и Проблемы",
+        "Будущие Направления",
+        "Заключение"
+    ]
     
-    review = None
-    msg_history = None
+    # Маппинг разделов к частям анализов групп
+    section_mapping = {
+        "Введение": ["Обзор подтемы"],
+        "Предметная область": ["Обзор подтемы", "Основные идеи и методы"],
+        "Методы и Подходы": ["Основные идеи и методы", "Сильные стороны и ограничения"],
+        "Ключевые Результаты и Открытия": ["Совпадающие выводы и подтверждающие результаты", "Различия и противоречия"],
+        "Ограничения и Проблемы": ["Сильные стороны и ограничения", "Различия и противоречия"],
+        "Будущие Направления": ["Пробелы исследований и открытые вопросы"],
+        "Заключение": ["Ключевые выводы для итогового мета-анализа"]
+    }
     
-    for iteration in range(num_iterations):
-        if iteration == 0:
-            # Первичная генерация обзора
-            response, msg_history = get_response_from_llm(
-                msg=review_prompt.format(
-                    topic=topic,
-                    analyses_text=analyses_text
-                ),
-                print_debug=False,
-                msg_history=msg_history,
-                rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
-            )
-            review = response
-        else:
-            # Проверка качества и улучшение
-            if review is None:
-                continue
-            
-            check_response, msg_history = get_response_from_llm(
-                msg=check_review_prompt.format(
-                    topic=topic
-                ),
-                print_debug=False,
-                msg_history=msg_history,
-                rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
-            )
-            
-            if "ПРИНЯТО" in check_response.upper():
-                break
-            else:
-                # Генерируем улучшенную версию            
-                response, msg_history = get_response_from_llm(
-                    msg=improve_review_prompt.format(
-                        topic=topic,
-                        check_response=check_response,
-                        ),
+    def extract_relevant_parts(analyses, relevant_headers):
+        """Извлекает релевантные части из анализов по заголовкам."""
+        extracted = []
+        for group_name, analysis in analyses.items():
+            lines = analysis.split('\n')
+            current_section = ""
+            for line in lines:
+                if any(header in line for header in relevant_headers):
+                    current_section = line.strip()
+                elif current_section and line.strip() and not line.startswith('#'):
+                    extracted.append(f"Из группы '{group_name}': {line.strip()}")
+        return '\n'.join(extracted) 
+    
+    # Генерировать каждый раздел
+    final_sections = {}
+    for section_name in sections:
+        print(f"[DEBUG] Генерирую раздел: {section_name}")
+
+        relevant_parts = extract_relevant_parts(group_analyses, section_mapping[section_name])
+        print(f"[DEBUG] Извлеченные релевантные части для раздела {section_name}: \n {relevant_parts}\n")
+        
+        section_content = None
+        
+        for iteration in range(num_iterations):
+            if iteration == 0:
+                # Первичная генерация раздела
+                prompt = f"""
+Напиши раздел "{section_name}" научной обзорной статьи по теме "{topic}".
+
+Используй только эту релевантную информацию из анализов групп:
+{relevant_parts}
+
+Требования:
+- Научный стиль, синтез (не пересказ).
+- Сравнивай подходы между группами.
+- Сохраняй ссылки на статьи [CITATION: arxiv_id | название].
+- Учитывай противоречия и консенсус.
+- Раздел уровня обзорной публикации.
+"""
+                response, _ = get_response_from_llm(
+                    msg=prompt,
                     print_debug=False,
-                    msg_history=msg_history,
                     rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
                 )
-                review = response
+                section_content = response
+            else:
+                # Компактное улучшение
+                check_prompt = f"""
+Проверь раздел "{section_name}" обзорной статьи по теме "{topic}".
+Оцени полноту, согласованность, логичность, научную строгость, глубину, ссылки на статьи, не потеряна ли информация из анализов групп.
+
+Раздел:
+{section_content}
+
+Релевантная информация:
+{relevant_parts}
+
+Дай детальную обратную связь. Если удовлетворительно, скажи "ПРИНЯТО". Иначе - конкретные предложения.
+"""
+                
+                check_response, _ = get_response_from_llm(
+                    msg=check_prompt,
+                    print_debug=False,
+                    rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
+                )
+                
+                if "ПРИНЯТО" in check_response.upper():
+                    break
+                else:
+                    improve_prompt = f"""
+Вот текущий раздел "{section_name}":
+{section_content}
+
+Вот фидбек:
+{check_response}
+
+Сделай новую исправленную версию раздела, учитывая фидбек.
+"""
+                    
+                    response, _ = get_response_from_llm(
+                        msg=improve_prompt,
+                        print_debug=False,
+                        rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
+                    )
+                    section_content = response
+        
+        final_sections[section_name] = section_content
     
-    return review
+    # Собрать итоговую статью
+    full_review = "\n\n".join([f"# {section_name}\n\n{content}" for section_name, content in final_sections.items()])
+
+    print(f'[DEBUG] Полный обзор до финальной проверки: \n {full_review} \n')
+    
+    # Финальная проверка всей статьи
+    check_prompt = f"""
+Проверь целиком обзорную статью по теме "{topic}".
+
+Проверь:
+- согласованность разделов
+- повторы
+- пропущенные переходы
+- противоречия
+- недостающий синтез
+- полноту раздела с пробелами исследований
+
+Статья:
+{full_review}
+
+Улучши статью глобально, не ломая качественные части. Если удовлетворительно, скажи "ПРИНЯТО". Иначе - исправленная версия.
+"""
+    
+    final_check, _ = get_response_from_llm(
+        msg=check_prompt,
+        print_debug=False,
+        rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
+    )
+    
+    if "ПРИНЯТО" in final_check.upper():
+        return full_review
+    else:
+        return final_check  
 
 
 def perform_grouping_and_analysis(topic, papers, extracted_dir='extracted_info', output_dir='analysis_output'):
@@ -288,7 +462,6 @@ def perform_grouping_and_analysis(topic, papers, extracted_dir='extracted_info',
     # Группируем статьи
     groups = group_papers_by_subtopics(papers_info, topic)
     print(f"[DEBUG] Статьи сгруппированы в {len(groups)} групп: {groups}")
-    input()
     
     # Сохраняем группы
     with open(output_path / 'groups.json', 'w', encoding='utf-8') as f:
@@ -324,12 +497,13 @@ extraction_prompt = """
 
 - title: Название статьи
 - problem: Главная проблема или исследовательский вопрос
-- method: Методология или подход, использованный в работе
+- compared_baselines: Какие методы или работы сравниваются в статье и как они соотносятся с предлагаемым подходом
 - results: Ключевые результаты или открытия
 - limitations: Любые ограничения, упомянутые в статье
 - novelty: Что новое или уникальное в этой работе
 - key_findings: 1-2 предложения, резюмирующие основные результаты
 - open_questions: Нерешенные вопросы или будущая работа, упомянутая в статье
+- implicit_gaps: Любые пробелы в исследованиях, которые неявно видны из текста, даже если авторы их не выделяют
 
 Отвечай только объектом JSON, без дополнительного текста. Объект JSON выделяется таким блоком: ```json  ```
 
@@ -339,7 +513,7 @@ extraction_prompt = """
 
 
 # Промпт для проверки качества извлечения
-quality_check_prompt = """
+extraction_quality_check_prompt = """
 Оцени извлеченную информацию из статьи. Проверьте точность, полноту и согласованность с оригинальным текстом.
 
 Извлеченная информация:
@@ -375,25 +549,37 @@ group_papers_by_subtopics_prompt = """
 Извлеченная ключевая информация по статьям:
 {papers_summary_text}
 
-Отвечай только объектом JSON.
+Отнеси каждую статью ТОЛЬКО К ОДНОЙ ПОДТЕМЕ. Отвечай только объектом JSON.
 """
 
 # Промпт для генерации анализа группы статей
 group_analysis_prompt = """
-Тебе дана группа научных статей по подтеме "{group_name}" в рамках более широкой темы "{topic}".
+Ты — агент научного синтеза, создающий промежуточный аналитический артефакт для последующей генерации обзорной научной статьи по теме "{topic}".
+
+Тебе дана группа научных статей "{group_name}", объединенных одной подтемой.
+
+ВАЖНО: не пересказывай статьи по отдельности. Нужно провести сравнительный мета-анализ группы работ.
+
+Сформируй подробный анализ со следующими разделами:
+1. Обзор подтемы: Какую исследовательскую область покрывают работы? Почему направление важно?
+2. Основные идеи и методы: Какие подходы предлагаются? Сгруппируй методы по типам. Сравнивай подходы между собой.
+3. Совпадающие выводы и подтверждающие результаты: Какие идеи подтверждаются несколькими работами? Указывай какие статьи это подтверждают.
+4. Различия и противоречия: Где статьи расходятся? Чем объясняются различия?
+5. Сильные стороны и ограничения: Сравни преимущества и недостатки подходов. Отрази ограничения, упомянутые в работах.
+6. Данные и экспериментальные оценки: Какие датасеты, метрики и способы оценки используются? Что общего и что различается?
+7. Пробелы исследований и открытые вопросы: Что остается нерешенным? Какие направления изучены недостаточно?
+8. Ключевые выводы для итогового мета-анализа: Какие выводы важно сохранить для дальнейшего построения обзорной статьи?
+
+ТРЕБОВАНИЯ:
+- Анализ должен быть подробным и вдумчивым.
+- Это промежуточный материал для финальной обзорной статьи.
+- Каждое содержательное утверждение сопровождай ссылкой вида:
+[CITATION: arxiv_id | название статьи]
+- Не делай утверждений без опоры на статьи.
+- Делай акцент на сравнении, синтезе и связях.
 
 Статьи в этой группе:
 {papers_combined}
-
-Твоя задача - предоставить комплексный анализ этой подтемы на основе статей. Включи:
-1. **Обзор**: Быстрый обзор того, что охватывает эта подтема.
-2. **Основные проблемы**: Распространенные проблемы, рассматриваемые в этих статьях.
-3. **Используемые методы**: Обзор методологий, применяемых в исследованиях.
-4. **Основные результаты**: Синтез ключевых результатов и открытий.
-5. **Ограничения**: Распространенные ограничения среди статей.
-6. **Новые вклады**: Какие новые идеи или подходы представлены.
-7. **Открытые вопросы**: Нерешенные проблемы и направления будущих исследований.
-8. **Сравнение**: Как эти статьи сравниваются/контрастируют друг с другом.
 
 Пиши анализ в структурированном формате с четкими заголовками.
 """
@@ -401,15 +587,16 @@ group_analysis_prompt = """
 
 # Промпт для проверки качества анализа группы статей
 check_group_analysis_prompt = """
-Проверь анализ подтемы "{group_name}". Проверь на полноту, точность, согласованность, relevance к статьям, научную строгость и ясность структуры.
+Проверь анализ подтемы "{group_name}" на полноту, точность, согласованность, relevance к статьям, научную строгость и ясность структуры. Дай подробную обратную связь по любым слабым местам, несоответствиям или областям для улучшения.
+Проверь:
+1. Все ли статьи действительно отражены.
+2. Достаточно ли глубок анализ.
+3. Есть ли сравнение, противоречия и связи.
+4. Все ли утверждения имеют ссылки на статьи.
+5. Выявлены ли пробелы исследований.
+6. Достаточно ли качественный это промежуточный артефакт для итогового обзора.
 
-Анализ:
-{analysis}
-
-Резюме статей:
-{papers_combined}
-
-Дай подробную обратную связь по любым слабым местам, несоответствиям или областям для улучшения. Будь строг: укажи отсутствующую информацию, логические пробелы, неясные объяснения или недостаточную глубину. Если анализ удовлетворительный, скажи "ПРИНЯТО". В противном случае, предоставь конкретные, действенные предложения для улучшения.
+Если анализ хороший, ответь только "ПРИНЯТО". В противном случае, предоставь конкретные, действенные предложения для улучшения: что пропущено, что поверхностно, какие утверждения не подтверждены, как улучшить анализ.
 Отвечай либо "ПРИНЯТО", либо подробными предложениями для улучшения.
 """
 
@@ -421,50 +608,32 @@ improve_group_analysis_prompt = """
 Фидбек на текущий анализ:
 {check_response}
 
-Предоставь улучшенную версию анализа, учитывая обратную связь.
+Предоставь улучшенную версию анализа, учитывая обратную связь: сохрани сильные части, усиль слабые разделы. Расширь недостаточно подробные части. Добавь недостающий сравнительный анализ. Исправь или добавь ссылки на статьи. Повышай ценность анализа как промежуточного артефакта.
 """
 
 
-# Промпт для генерации итогового обзора
-review_prompt = """
-Тебе даны анализы различных подтем в рамках темы "{topic}". Твоя задача - синтезировать их в комплексный обзор литературы.
+# Глобальная проверка всей обзорной статьи
+final_review_check_prompt = """ 
+Отредактируй следующую обзорную статью как цельный научный обзор. Верни только итоговый текст.
 
-Анализы подтем:
-{analyses_text}
+Проверь и при необходимости улучши статью по следующим критериям:
+- согласованность разделов
+- повторы
+- пропущенные переходы
+- противоречия
+- недостающий синтез
+- полноту раздела с пробелами исследований
 
-Структурируй финальную статью обзора с следующими разделами:
-1. **Введение**: Обзор темы и ее важности.
-2. **Фон и связанные работы**: Общий контекст из подтем.
-3. **Методы и подходы**: Общие методологии среди подтем.
-4. **Ключевые находки и результаты**: Синтез главных результатов.
-5. **Ограничения и вызовы**: Распространенные ограничения.
-6. **Будущие направления**: Открытые вопросы и возможности исследований.
-7. **Заключение**: Итоги и применения.
+Текст статьи:
+{review}
 
-Убедись, что обзор построен логично и связывает подтемы согласованно. Сделай его подходящим для публикации как обзорную научную статью.
-"""
-
-
-# Промпт для проверки качества итогового обзора
-check_review_prompt = """
-Проверь написанную тобой обзорную статью по теме "{topic}". Проверь на полноту, согласованность, логический поток, научную строгость, подходящесть для публикации, глубину анализа и интеграцию подтем.
-
-Дай детальную обратную связь по любым слабым местам, несоответствиям или областям для улучшения. Будь строг: укажи отсутствующую информацию, логические пробелы, неясные объяснения или недостаточную глубину. Если анализ удовлетворительный, скажи "ПРИНЯТО". В противном случае, предоставь конкретные, действенные предложения для улучшения.
-"""
-
-
-# Промпт для улучшения итогового обзора
-improve_review_prompt = """
-Основываясь на обратной связи, улучши обзорную статью по теме "{topic}".
-
-Фидбек:
-{check_response}
-
-Приведи улучшенную версию обзора, учитывая обратную связь.
+Улучши статью глобально, не ломая уже качественные части.
+Верни ТОЛЬКО финальную обзорную статью. Не включай комментарии, не включай оценку качества, не включай пояснения. Только текст статьи.
 """
 
 
 if __name__ == "__main__":
-    txt_dir = "txts"
-    output_dir = "extracted_info"
-    extract_key_info_from_papers([ArxivPaper(arxiv_id="2409.11363v1", title="Test Paper", abstract="Test abstract", authors=[],published=None, updated=None, doi=None, pdf_url=None, source_url=None)], output_dir=output_dir, txt_dir=txt_dir)
+    pass
+    # txt_dir = "txts"
+    # output_dir = "extracted_info"
+    # extract_key_info_from_papers([ArxivPaper(arxiv_id="2409.11363v1", title="Test Paper", abstract="Test abstract", authors=[],published=None, updated=None, doi=None, pdf_url=None, source_url=None)], output_dir=output_dir, txt_dir=txt_dir)
