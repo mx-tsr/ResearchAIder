@@ -9,50 +9,32 @@ load_dotenv()
 
 OPENROUTER_API_RATE_LIMIT_SEC = 3.0 
 MAX_NUM_TOKENS = 16384
-OPENROUTER_API_BASE_URL = os.getenv("OPENROUTER_API_BASE_URL")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL")
+# OPENROUTER_API_BASE_URL = os.getenv("OPENROUTER_API_BASE_URL")
+# OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+# OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL")
 
-OPENROUTER_API_BASE_URL_FALLBACK_1 = os.getenv("OPENROUTER_API_BASE_URL_FALLBACK_1")
-OPENROUTER_API_KEY_FALLBACK_1 = os.getenv("OPENROUTER_API_KEY_FALLBACK_1")
-OPENROUTER_MODEL_FALLBACK_1 = os.getenv("OPENROUTER_MODEL_FALLBACK_1")
+# OPENROUTER_API_KEY_FALLBACK_1 = os.getenv("OPENROUTER_API_KEY_FALLBACK_1")
+# OPENROUTER_API_KEY_FALLBACK_2 = os.getenv("OPENROUTER_API_KEY_FALLBACK_2")
+# OPENROUTER_API_KEY_FALLBACK_3 = os.getenv("OPENROUTER_API_KEY_FALLBACK_3")
+# OPENROUTER_API_KEY_FALLBACK_4 = os.getenv("OPENROUTER_API_KEY_FALLBACK_4")
 
-OPENROUTER_API_BASE_URL_FALLBACK_2 = os.getenv("OPENROUTER_API_BASE_URL_FALLBACK_2")
-OPENROUTER_API_KEY_FALLBACK_2 = os.getenv("OPENROUTER_API_KEY_FALLBACK_2")
-OPENROUTER_MODEL_FALLBACK_2 = os.getenv("OPENROUTER_MODEL_FALLBACK_2")
+OLLAMA_API_BASE_URL = os.getenv("OLLAMA_API_BASE_URL")
+OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL")
 
-OPENROUTER_API_BASE_URL_FALLBACK_3 = os.getenv("OPENROUTER_API_BASE_URL_FALLBACK_3")
-OPENROUTER_API_KEY_FALLBACK_3 = os.getenv("OPENROUTER_API_KEY_FALLBACK_3")
-OPENROUTER_MODEL_FALLBACK_3 = os.getenv("OPENROUTER_MODEL_FALLBACK_3")
-
-OPENROUTER_API_BASE_URL_FALLBACK_4 = os.getenv("OPENROUTER_API_BASE_URL_FALLBACK_4")
-OPENROUTER_API_KEY_FALLBACK_4 = os.getenv("OPENROUTER_API_KEY_FALLBACK_4")
-OPENROUTER_MODEL_FALLBACK_4 = os.getenv("OPENROUTER_MODEL_FALLBACK_4")
-
-MODELLGATE_API_BASE_URL = os.getenv("MODELLGATE_API_BASE_URL")
-MODELLGATE_API_KEY = os.getenv("MODELLGATE_API_KEY")
-MODELLGATE_MODEL = os.getenv("MODELLGATE_MODEL")
-
-# Список API конфигураций: [(key, url), ...]
-OPENROUTER_APIS = [(OPENROUTER_API_KEY, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL)]
-if OPENROUTER_API_KEY_FALLBACK_1 and OPENROUTER_API_BASE_URL_FALLBACK_1:
-    OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_1, OPENROUTER_API_BASE_URL_FALLBACK_1, OPENROUTER_MODEL_FALLBACK_1))
-if OPENROUTER_API_KEY_FALLBACK_2 and OPENROUTER_API_BASE_URL_FALLBACK_2:
-    OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_2, OPENROUTER_API_BASE_URL_FALLBACK_2, OPENROUTER_MODEL_FALLBACK_2))
-if OPENROUTER_API_KEY_FALLBACK_3 and OPENROUTER_API_BASE_URL_FALLBACK_3:
-    OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_3, OPENROUTER_API_BASE_URL_FALLBACK_3, OPENROUTER_MODEL_FALLBACK_3))
-if OPENROUTER_API_KEY_FALLBACK_4 and OPENROUTER_API_BASE_URL_FALLBACK_4:
-    OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_4, OPENROUTER_API_BASE_URL_FALLBACK_4, OPENROUTER_MODEL_FALLBACK_4))
-if MODELLGATE_API_KEY and MODELLGATE_API_BASE_URL:
-    OPENROUTER_APIS.append((MODELLGATE_API_KEY, MODELLGATE_API_BASE_URL, MODELLGATE_MODEL))
-
-
-if not OPENROUTER_API_KEY:
-    raise EnvironmentError("OPENROUTER_API_KEY не установлен. Поместите его в .env или переменные окружения.")
-if not OPENROUTER_API_BASE_URL:
-    raise EnvironmentError("OPENROUTER_API_BASE_URL не установлен. Поместите его в .env или переменные окружения.")
-if not OPENROUTER_MODEL:
-    raise EnvironmentError("OPENROUTER_MODEL не установлен. Поместите его в .env или переменные окружения.")
+# Список API конфигураций: [(key, url, model), ...]
+# OPENROUTER_APIS = [(OPENROUTER_API_KEY, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL)]
+OPENROUTER_APIS = []
+# if OPENROUTER_API_KEY_FALLBACK_1:
+#     OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_1, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL))
+# if OPENROUTER_API_KEY_FALLBACK_2:
+#     OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_2, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL))
+# if OPENROUTER_API_KEY_FALLBACK_3:
+#     OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_3, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL))
+# if OPENROUTER_API_KEY_FALLBACK_4:
+#     OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_4, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL))
+if OLLAMA_API_KEY:
+    OPENROUTER_APIS.append((OLLAMA_API_KEY, OLLAMA_API_BASE_URL, OLLAMA_MODEL))
 
 API_DAILY_LIMIT_EXHAUSTED = [False] * len(OPENROUTER_APIS)
 
@@ -98,7 +80,7 @@ def call_llm_model(api_key, api_url, model, messages, temperature):
     return response.choices[0].message.content
 
 
-@backoff.on_exception(backoff.expo, (RateLimitError, APITimeoutError, APIError), max_time=90, on_backoff=backoff_handler)
+@backoff.on_exception(backoff.expo, (RateLimitError, APITimeoutError, APIError), max_time=90, raise_on_giveup=False, on_backoff=backoff_handler)
 def get_response_from_llm(
         msg,
         print_debug=False,
@@ -131,7 +113,9 @@ def get_response_from_llm(
             new_msg_history = new_msg_history + [{"role": "assistant", "content": content}]
 
             print(f'[DEBUG] получен ответ от LLM (idx={api_idx+1}, api={api_url}, model={api_model}):\n {"-"*50}\n {content}\n {"-"*50}\n')
-            
+            with open("logs/llm_logs.txt", "a", encoding='utf-8') as file:
+                file.write(f'[DEBUG] получен ответ от LLM (idx={api_idx+1}, api={api_url}, model={api_model}):\n {"-"*50}\n {content}\n {"-"*50}\n\n')
+
             if print_debug:
                 print()
                 print("*" * 20 + " LLM START " + "*" * 20)
@@ -168,7 +152,7 @@ def get_response_from_llm(
             if "401" in str(e) or "Unauthorized" in str(e):
                 print("Проверьте OPENROUTER_API_KEY в .env")
             elif "404" in str(e):
-                print(f"Модель '{OPENROUTER_MODEL}' не найдена")
+                print(f"Модель '{api_model}' не найдена")
             last_error = e
             raise
 
