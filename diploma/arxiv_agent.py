@@ -15,12 +15,24 @@ import xml.etree.ElementTree as ET
 from llm_agent import get_response_from_llm
 
 ARXIV_API_URL = 'http://export.arxiv.org/api/query'  # базовый URL для запросов к arXiv API
-ARXIV_API_RATE_LIMIT_SEC = 3.0  # документация просит делать не чаще 1 запроса в 3 секунды
+ARXIV_API_RATE_LIMIT_SEC = 3.0  # документация arxiv просит делать не чаще 1 запроса в 3 секунды
 CACHE_FILE = 'cache/arxiv_cache.json'  # файл для кэширования результатов запросов к arXiv
-CACHE_ARXIV_TTL = 24
+CACHE_ARXIV_TTL = 48  # время, через которое будет обновляться кэш обращений к arxiv
 
 @dataclass
 class ArxivPaper:
+    '''
+    Класс для хранения информации о статье arXiv. Поля:
+    - arxiv_id: str - уникальный идентификатор статьи на arXiv
+    - title: str - название статьи
+    - abstract: str - аннотация статьи
+    - authors: List[str] - список авторов статьи
+    - published: str - дата публикации статьи
+    - updated: str - дата последнего обновления статьи
+    - doi: Optional[str] - DOI статьи, если есть
+    - pdf_url: str - URL для скачивания PDF статьи
+    - source_url: str - URL страницы статьи на arXiv
+    '''
     arxiv_id: str
     title: str
     abstract: str
@@ -33,6 +45,9 @@ class ArxivPaper:
 
 
 def arxiv_paper_from_dict(data):
+    '''
+    Переводит информацию о статье из формата словаря в ArxivPaper
+    '''
     return ArxivPaper(
         arxiv_id=data.get('arxiv_id', ''),
         title=data.get('title', ''),
@@ -47,14 +62,23 @@ def arxiv_paper_from_dict(data):
 
 
 def rate_limit_sleep(extra=0.2):
+    '''
+    Выдерживает паузу при обращении к API
+    '''
     time.sleep(ARXIV_API_RATE_LIMIT_SEC + extra)
 
 
 def get_topic_hash(topic):
+    '''
+    Возвращает хеш темы при кэшировании
+    '''
     return hashlib.md5(topic.lower().strip().encode()).hexdigest()
 
 
 def load_cache():
+    '''
+    Извлекает результат запросов для темы из кэша
+    '''
     if os.path.exists(CACHE_FILE):
         with open(CACHE_FILE, 'r') as f:
             return json.load(f)
@@ -62,13 +86,20 @@ def load_cache():
 
 
 def save_cache(cache):
+    '''
+    Заносит результат запросов для темы в кэш
+    '''
     os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
     with open(CACHE_FILE, 'w') as f:
         json.dump(cache, f, indent=2)
 
 
 def get_arxiv_id_from_url(arxiv_id_url):
-    # arxiv_id_url обычно выглядит так: http://arxiv.org/abs/1234.5678v2, нужно оставить только последнюю часть
+    '''
+    Извлекает из url статьи ее arxiv_id. 
+    
+    arxiv_id_url обычно выглядит так: http://arxiv.org/abs/1234.5678v2, нужно оставить только последнюю часть
+    '''
     match = re.search(r'(?:abs|pdf)/([^/]+)', arxiv_id_url)
     if match:
         return match.group(1)
@@ -76,6 +107,11 @@ def get_arxiv_id_from_url(arxiv_id_url):
 
 
 def parse_arxiv_atom(xml):
+    '''
+    Парсит XML, который возвращает arXiv API, и извлекает из него информацию о статьях.
+    
+    Возвращает список объектов ArxivPaper.
+    '''
     root = ET.fromstring(xml)
     namespaces = {'atom': 'http://www.w3.org/2005/Atom', 'arxiv': 'http://arxiv.org/schemas/atom'}
     papers = []
@@ -112,17 +148,22 @@ def parse_arxiv_atom(xml):
 
 
 def format_search_query(topic, field='all'):
-    # добавляет к запросу модификатор поиска и меняет все пробелы на плюсы, удаляет кавычки
+    '''
+    Преобразует текстовый запрос в формат для поиска arxiv API: 
+    добавляет к запросу модификатор поиска и меняет все пробелы на плюсы, удаляет кавычки
+    '''
     query = topic.replace('"', '')
     query = re.sub(r"\s+", "+", query)
     return f"{field}:{query}"
 
 
 def expand_topic_queries(topic, max_number_of_query_variants=7):
+    '''
+    Расширяет исходную тему, заданную пользователем, генерируя несколько похожих для семантического поиска
+    '''
     expanded_queries = []
     expanded_queries.append(format_search_query(topic, 'all'))
 
-    # Генерируем другие варианты запросов для семантического поиска
     msg, _ = get_response_from_llm(
         expand_topic_prompt.format(
             topic=topic, 
@@ -138,6 +179,9 @@ def expand_topic_queries(topic, max_number_of_query_variants=7):
     
 
 def search_arxiv(query, max_results=20, start=0, sort_by='relevance', sort_order='descending'):
+    '''
+    Делает GET-запрос к arxiv API по запросу и возвращает список ArxivPaper 
+    '''
     params = {
         'search_query': query,
         'start': start,
@@ -156,6 +200,10 @@ def search_arxiv(query, max_results=20, start=0, sort_by='relevance', sort_order
 
 
 def get_set_number_of_papers(topic, num_of_selected_papers=10, total_num_of_papers=70, num_of_expanded_queries=7, papers_per_query=10, store_path=None):
+    '''
+    Возвращает заданное количество статей по теме. Сначала расширяет тему, потом ищет статьи по каждому расширенному запросу, затем выбирает из них заданное количество наиболее релевантных.
+    '''
+    
     print(f'[DEBUG] Проверяю нет ли исходной темы в кэше.')
     
     cache = load_cache()
@@ -258,6 +306,9 @@ def get_set_number_of_papers(topic, num_of_selected_papers=10, total_num_of_pape
 
 
 def download_pdf(arxiv_id_url, target_dir='pdfs', timeout=120):
+    '''
+    Скачивает статью в формате pdf по ее arxiv_id_url и сохраняет в target_dir. Возвращает путь к сохраненному файлу.
+    '''
     target_dir = Path(target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -296,6 +347,9 @@ def download_pdf(arxiv_id_url, target_dir='pdfs', timeout=120):
 
 
 def download_papers(papers, pdf_dir='pdfs'):
+    '''
+    Скачивает статьи в формате pdf по их arxiv_id_url и сохраняет в pdf_dir. Возвращает список путей к сохраненным файлам.
+    '''
     downloaded_files = []
     for paper in papers:
         try:
@@ -307,6 +361,9 @@ def download_papers(papers, pdf_dir='pdfs'):
 
 
 def format_pdf_text(text):
+    '''
+    Форматирует извлеченный из PDF текст, оставляя только основное содержание статьи и удаляя ненужные разделы.
+    '''
     # Оставляем текст между Introduction и Acknowledgements
     start_of_text = text.find('Introduction')
     end_of_text = None
@@ -337,7 +394,11 @@ def format_pdf_text(text):
 
     return text
 
+
 def extract_text_from_paper_pdf(pdf_path, min_size=100):
+    '''
+    Извлекает текст из PDF статьи, используя несколько разных библиотек для повышения надежности. Сначала пробует pymupdf4llm, если текст слишком короткий, пробует pymupdf, а если и он не справляется, использует pypdf.
+    '''
     try:
         text = pymupdf4llm.to_markdown(pdf_path)
         if len(text) < min_size:
@@ -362,6 +423,8 @@ def extract_text_from_paper_pdf(pdf_path, min_size=100):
 
 
 def extract_and_save_texts(papers, txt_dir='txts', pdf_dir='pdfs'):
+    '''
+    Извлекает текст из PDF статей и сохраняет его в txt файлы. Возвращает список путей к сохраненным txt файлам.'''
     txt_dir_path = Path(txt_dir)
     txt_dir_path.mkdir(parents=True, exist_ok=True)
     
@@ -393,11 +456,10 @@ def extract_and_save_texts(papers, txt_dir='txts', pdf_dir='pdfs'):
 
 def search_and_download_arxiv_papers(topic, num_of_selected_papers=10, total_num_of_papers=70, num_of_expanded_queries=5, store_results='logs/arxiv_search_log.json'):
     """
-    Основная функция: 
-    1. Расширение запросов, 
-    2. Поиск статей, 
-    3. Выбор 10, 
-    4. Скачивание PDF
+    Основная функция, которая выполняет: 
+    1. Расширение запросов, поиск статей, выбор 10 самых релевантных. 
+    2. Скачивание их PDF
+    3. Извлечение текста из PDF и сохранение его в txt файлы.
     """
     print(f'[DEBUG] Начинаю поиск заданного числа статей' + '\n')
 

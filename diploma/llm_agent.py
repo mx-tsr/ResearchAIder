@@ -8,31 +8,34 @@ from openai import OpenAI, RateLimitError, APITimeoutError, APIError
 load_dotenv()
 
 OPENROUTER_API_RATE_LIMIT_SEC = 3.0 
-MAX_NUM_TOKENS = 16384
-# OPENROUTER_API_BASE_URL = os.getenv("OPENROUTER_API_BASE_URL")
-# OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-# OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL")
+# MAX_NUM_TOKENS = 16384
+OPENROUTER_API_BASE_URL = os.getenv("OPENROUTER_API_BASE_URL")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL")
 
-# OPENROUTER_API_KEY_FALLBACK_1 = os.getenv("OPENROUTER_API_KEY_FALLBACK_1")
-# OPENROUTER_API_KEY_FALLBACK_2 = os.getenv("OPENROUTER_API_KEY_FALLBACK_2")
-# OPENROUTER_API_KEY_FALLBACK_3 = os.getenv("OPENROUTER_API_KEY_FALLBACK_3")
-# OPENROUTER_API_KEY_FALLBACK_4 = os.getenv("OPENROUTER_API_KEY_FALLBACK_4")
+OPENROUTER_API_KEY_FALLBACK_1 = os.getenv("OPENROUTER_API_KEY_FALLBACK_1")
+OPENROUTER_API_KEY_FALLBACK_2 = os.getenv("OPENROUTER_API_KEY_FALLBACK_2")
+OPENROUTER_API_KEY_FALLBACK_3 = os.getenv("OPENROUTER_API_KEY_FALLBACK_3")
+OPENROUTER_API_KEY_FALLBACK_4 = os.getenv("OPENROUTER_API_KEY_FALLBACK_4")
+OPENROUTER_API_KEY_FALLBACK_5 = os.getenv("OPENROUTER_API_KEY_FALLBACK_5")
 
 OLLAMA_API_BASE_URL = os.getenv("OLLAMA_API_BASE_URL")
 OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL")
 
 # Список API конфигураций: [(key, url, model), ...]
-# OPENROUTER_APIS = [(OPENROUTER_API_KEY, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL)]
-OPENROUTER_APIS = []
-# if OPENROUTER_API_KEY_FALLBACK_1:
-#     OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_1, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL))
-# if OPENROUTER_API_KEY_FALLBACK_2:
-#     OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_2, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL))
-# if OPENROUTER_API_KEY_FALLBACK_3:
-#     OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_3, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL))
-# if OPENROUTER_API_KEY_FALLBACK_4:
-#     OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_4, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL))
+# OPENROUTER_APIS = []
+OPENROUTER_APIS = [(OPENROUTER_API_KEY, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL)]
+if OPENROUTER_API_KEY_FALLBACK_1:
+    OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_1, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL))
+if OPENROUTER_API_KEY_FALLBACK_2:
+    OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_2, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL))
+if OPENROUTER_API_KEY_FALLBACK_3:
+    OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_3, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL))
+if OPENROUTER_API_KEY_FALLBACK_4:
+    OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_4, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL))
+if OPENROUTER_API_KEY_FALLBACK_5:
+    OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_5, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL))
 if OLLAMA_API_KEY:
     OPENROUTER_APIS.append((OLLAMA_API_KEY, OLLAMA_API_BASE_URL, OLLAMA_MODEL))
 
@@ -40,11 +43,17 @@ API_DAILY_LIMIT_EXHAUSTED = [False] * len(OPENROUTER_APIS)
 
 
 def backoff_handler(details):
-    """Логирует попытки backoff при rate limit"""
+    """
+    Логирует попытки backoff при rate limit ошибках
+    """
     print("[DEBUG] Попытка #{tries}, ждём {wait:0.1f} сек...".format(**details))
 
 
 def clean_text(text):
+    '''
+    Очищает текст от Markdown форматирования, чтобы LLM не воспринимал его как команды для форматирования. 
+    Убирает **, *, `, ###, * в начале строк и * в конце строк.
+    '''
     # Убираем ** с обеих сторон
     text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
     
@@ -67,6 +76,9 @@ def clean_text(text):
 
 
 def call_llm_model(api_key, api_url, model, messages, temperature):
+    '''
+    Вызывает LLM модель через OpenAI клиент. Возвращает текст ответа.
+    '''
     client = OpenAI(
         api_key=api_key,
         base_url=api_url,
@@ -75,7 +87,7 @@ def call_llm_model(api_key, api_url, model, messages, temperature):
         model=model,
         messages=messages,
         temperature=temperature,
-        max_tokens=MAX_NUM_TOKENS,
+        # max_tokens=MAX_NUM_TOKENS,
     )
     return response.choices[0].message.content
 
@@ -88,6 +100,11 @@ def get_response_from_llm(
         temperature=0.7,
         rate_limit=OPENROUTER_API_RATE_LIMIT_SEC
 ):
+    '''
+    Основная функция для получения ответа от LLM. Принимает сообщение от пользователя, историю сообщений, температуру и rate limit. 
+    Пытается вызвать несколько API LLM по очереди, пока не получит ответ или не исчерпает все варианты. 
+    Логирует ответы и ошибки.
+    '''
     if msg_history is None:
         msg_history = []
 
@@ -143,12 +160,12 @@ def get_response_from_llm(
                 raise
 
         except APITimeoutError as e:
-            print(f"[ERROR] API timeout для API {api_url}: {e}")
+            print(f"[ERROR] API timeout для API {api_idx} {api_url}: {e}")
             last_error = e
             raise
 
         except APIError as e:
-            print(f"[ERROR] API error для API {api_url}: {e}")
+            print(f"[ERROR] API error для API {api_idx} {api_url}: {e}")
             if "401" in str(e) or "Unauthorized" in str(e):
                 print("Проверьте OPENROUTER_API_KEY в .env")
             elif "404" in str(e):

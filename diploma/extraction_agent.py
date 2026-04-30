@@ -7,13 +7,13 @@ from pathlib import Path
 from arxiv_agent import ArxivPaper
 from llm_agent import get_response_from_llm
 
-OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC = 7.0 
+OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC = 5.0 
 
 def extract_json_from_response(response):
-    """
+    '''
     Извлекает JSON из ответа LLM.
     Ищет JSON между ```json и ``` или просто JSON объект.
-    """
+    '''
     # Ищем JSON между маркерами
     json_match = re.search(r'```json\s*(.*?)\s*```', response, re.DOTALL)
     if json_match:
@@ -34,9 +34,9 @@ def extract_json_from_response(response):
 
 
 def extract_key_info_from_paper(text, num_iterations=2):
-    """
+    '''
     Извлекает ключевую информацию по полям из текста статьи с итеративной проверкой качества.
-    """
+    '''
     extracted = None
     msg_history = None
 
@@ -76,9 +76,9 @@ def extract_key_info_from_paper(text, num_iterations=2):
 
 
 def extract_key_info_from_papers(papers, output_dir='extracted_info', txt_dir='txts'):
-    """
-    Обрабатывает все txt файлы в директории и сохраняет извлеченную информацию в JSON.
-    """
+    '''
+    Обрабатывает все txt файлы статей в директории и сохраняет извлеченную информацию в JSON.
+    '''
     output_dir_path = Path(output_dir)
     output_dir_path.mkdir(parents=True, exist_ok=True)
 
@@ -109,9 +109,9 @@ def extract_key_info_from_papers(papers, output_dir='extracted_info', txt_dir='t
 
 
 def load_extracted_info(papers, extracted_dir='extracted_info'):
-    """
+    '''
     Загружает JSON файлы статей из extracted_info и возвращает список словарей.
-    """
+    '''
     papers_info = []
     
     for paper in papers:
@@ -129,10 +129,10 @@ def load_extracted_info(papers, extracted_dir='extracted_info'):
 
 
 def group_papers_by_subtopics(papers_info, topic):
-    """
-    Группирует статьи по подтемам с помощью LLM с refinement.
+    '''
+    Группирует статьи по подтемам с помощью LLM и итеративным улучшением.
     Возвращает словарь: {group_name: [paper_ids]}
-    """
+    '''
    
     papers_summary = []
     for paper in papers_info:
@@ -218,9 +218,9 @@ def group_papers_by_subtopics(papers_info, topic):
 
 
 def generate_group_analysis(papers_info, group_name, paper_ids, topic, num_iterations=3):
-    """
-    Генерирует анализ для одной группы статей с итеративным улучшением через объединённый промпт.
-    """
+    '''
+    Генерирует анализ для одной группы статей с итеративным улучшением.
+    '''
     group_papers = [p for p in papers_info if p['arxiv_id'] in paper_ids]
     
     papers_text = []
@@ -276,11 +276,12 @@ def generate_group_analysis(papers_info, group_name, paper_ids, topic, num_itera
     
     return analysis
 
+
 def extract_relevant_parts(analyses, relevant_headers):
-    """
+    '''
     Извлекает релевантные части из анализов по заголовкам (маркеры ##).
     Использует структурированный формат с явными маркерами разделов.
-    """
+    '''
     extracted = {}
     
     for group_name, analysis in analyses.items():
@@ -322,10 +323,9 @@ def extract_relevant_parts(analyses, relevant_headers):
 
 
 def generate_final_review(group_analyses, topic, num_iterations=3):
-    """
-    Генерирует итоговый обзор статьи по фиксированным разделам с объединённым промптом.
-    БЕЗ ссылок на статьи - они добавляются отдельно.
-    """
+    '''
+    Генерирует итоговый обзор статьи по фиксированным разделам.
+    '''
     # Фиксированные разделы финального обзора
     sections = [
         "Введение",
@@ -348,7 +348,6 @@ def generate_final_review(group_analyses, topic, num_iterations=3):
         "Заключение": ["Ключевые выводы для итогового мета-анализа"]
     }
     
-    # Генерировать каждый раздел
     final_sections = {}
     
     for section_name in sections:
@@ -416,7 +415,7 @@ def generate_final_review(group_analyses, topic, num_iterations=3):
     # Собрать итоговую статью БЕЗ ссылок
     full_review = "\n\n".join([f"# {section_name}\n\n{content}" for section_name, content in final_sections.items()])
     
-    print(f'[DEBUG] Полный обзор БЕЗ ССЫЛОК сформирован: {full_review}\n')
+    print('[DEBUG] Полный обзор БЕЗ ССЫЛОК сформирован\n')
     
     # Финальная проверка всей статьи
     msg_history = None
@@ -445,79 +444,160 @@ def generate_final_review(group_analyses, topic, num_iterations=3):
 
 
 def extract_response_block(response, label='RESPONSE'):
-    """Извлекает содержимое блока RESPONSE из ответа LLM."""
-    match = re.search(rf'{label}:\s*```\n(.*?)\n```', response, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    
-    print('f[ERROR] Не найден блок {label} в ответе\n')
+    '''
+    Извлекает содержимое блока RESPONSE из ответа LLM.
+    '''
+    patterns = [
+        rf'{label}:\s*```(?:\w*)\n(.*?)\n```',
+        rf'{label}:\s*`\s*\n(.*?)\n`',
+        rf'{label}:\s*(.*)',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, response, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+
+    if f'{label}:' in response:
+        print(f'[WARN] Блок {label} найден, но не удалось распарсить формат. Использую остаток после метки.')
+        return response.split(f'{label}:', 1)[1].strip()
+
+    print(f'[ERROR] Не найден блок {label} в ответе\n')
     return None
+
+
+def split_review_into_sections(review_text):
+    sections = []
+    current_header = None
+    current_lines = []
+
+    for line in review_text.splitlines():
+        if line.startswith('# '):
+            if current_header is not None:
+                sections.append((current_header, '\n'.join(current_lines).strip()))
+            current_header = line.strip()
+            current_lines = []
+        else:
+            current_lines.append(line)
+
+    if current_header is not None:
+        sections.append((current_header, '\n'.join(current_lines).strip()))
+    elif review_text.strip():
+        sections.append(('# Review', review_text.strip()))
+
+    return sections
+
+
+def add_citations_to_section(section_header, section_body, papers_info_str, topic, num_iterations=2):
+    section_text = f"{section_header}\n\n{section_body.strip()}"
+    current_section = section_text
+    msg_history = None
+
+    for iteration in range(num_iterations):
+        if iteration == 0:
+            # Добавляем ссылки в секцию
+            section_prompt = section_citation_prompt.format(
+                topic=topic,
+                section_text=current_section,
+                papers_info=papers_info_str,
+            )
+
+            response, msg_history = get_response_from_llm(
+                msg=section_prompt,
+                print_debug=False,
+                msg_history=msg_history,
+                temperature=0.3,
+                rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC,
+            )
+            parsed = extract_response_block(response, label='RESPONSE')
+
+            if parsed and section_header in parsed:
+                current_section = parsed
+            else:
+                print(f"[DEBUG] Секция '{section_header}' не прошла проверку на добавление ссылок, сохраняем исходный текст секции.")
+                return section_text
+        else:
+            # Проверяем и улучшаем добавление ссылок
+            check_prompt = f"""
+Текущая версия секции со ссылками:
+{current_section}
+
+Проверь эту секцию на наличие всех необходимых ссылок. Не меняй текст, кроме добавления ссылок. Если ссылки добавлены полностью, ответь в RESPONSE точно тем же текстом секции и добавь в THOUGHT 'I am done'. Если нужно добавить ещё ссылки, верни обновлённую секцию и НЕ пиши 'I am done'. Не пиши ничего кроме блоков THOUGHT и RESPONSE (никаких примечаний).
+ПИШИ весь текст на русском, кроме названий статей, на которые ссылаешься. 
+Доступные статьи (используй ТОЧНЫЕ arxiv_id и названия):
+{papers_info_str}
+
+Отвечай строго по шаблону:
+THOUGHT:
+< подтверждающие мысли >
+
+RESPONSE:
+```
+< старый текст секции или текст с дополненными ссылками >
+```
+"""
+            check_response, msg_history = get_response_from_llm(
+                msg=check_prompt,
+                print_debug=False,
+                msg_history=msg_history,
+                rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC,
+            )
+            check_parsed = extract_response_block(check_response, label='RESPONSE')
+
+            if check_parsed and section_header in check_parsed:
+                if "I am done" in check_response and check_parsed == current_section:
+                    break
+                current_section = check_parsed
+            else:
+                print(f"[DEBUG] Проверка ссылок для секции '{section_header}' вернула неполный текст, сохраняем предыдущий.")
+                break
+
+    return current_section
 
 
 def add_citations_to_review(review_text, papers_info, topic, num_iterations=3):
     """
     Добавляет ссылки на статьи в готовый обзор (отдельный этап).
-    Использует msg_history для контекста.
+    Работает секцией за секцией, чтобы уменьшить размер промпта и избежать усечения ответа.
     """
     papers_list = []
     for p in papers_info:
-        papers_list.append(f"- arxiv_id: {p['arxiv_id']}\n  title: {p['title']}\n  problem: {p['problem']}\n results: {p['results']}")
+        papers_list.append(
+            f"- arxiv_id: {p['arxiv_id']}\n  title: {p['title']}\n  problem: {p['problem']}\n  results: {p['results']}"
+        )
     papers_info_str = "\n".join(papers_list)
 
-    review_with_citations = review_text
-    msg_history = None
+    sections = split_review_into_sections(review_text)
+    updated_sections = []
 
-    for iteration in range(num_iterations):
-        if iteration == 0:
-            add_citations_msg = add_citations_prompt.format(
-                topic=topic,
-                review_text=review_with_citations,
-                papers_info=papers_info_str
-            )
+    for section_header, section_body in sections:
+        updated_section = add_citations_to_section(
+            section_header=section_header,
+            section_body=section_body,
+            papers_info_str=papers_info_str,
+            topic=topic,
+            num_iterations=num_iterations,
+        )
+        updated_sections.append(updated_section)
 
-            response, msg_history = get_response_from_llm(
-                msg=add_citations_msg,
-                print_debug=False,
-                msg_history=msg_history,
-                rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
-            )
+    review_with_citations = "\n\n".join(updated_sections)
 
-            parsed = extract_response_block(response, label='RESPONSE')
-            if parsed:
-                # Если модель вернула обрезанный текст или не сохранила структуру, оставляем прежний обзор
-                if all(header in parsed for header in ["# Введение", "# Предметная область", "# Методы и Подходы", "# Ключевые Результаты и Открытия", "# Ограничения и Проблемы", "# Будущие Направления", "# Заключение"]):
-                    review_with_citations = parsed
-                else:
-                    print("[DEBUG] Добавление цитат вернуло некорректный текст, сохранён предыдущий обзор без изменений.")
-                    break
-
-        else:
-            check_msg = f"""
-Проверь этот обзор на наличие всех необходимых ссылок. Не меняй текст, кроме добавления ссылок. Если ссылки добавлены полностью, ответь в RESPONSE точно тем же текстом обзора и добавь в мыслях 'I am done'. Если нужно добавить ещё ссылки, верни обновлённый обзор и НЕ пиши 'I am done'.
-
-THOUGHT:
-
-RESPONSE:
-```
-{review_with_citations}
-```
-"""
-            check_response, msg_history = get_response_from_llm(
-                msg=check_msg,
-                print_debug=False,
-                msg_history=msg_history,
-                rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
-            )
-            check_parsed = extract_response_block(check_response, label='RESPONSE')
-            if "I am done" in check_response and check_parsed == review_with_citations:
-                break
-            if check_parsed and len(check_parsed) > 0:
-                review_with_citations = check_parsed
+    required_headers = [
+        "# Введение",
+        "# Предметная область",
+        "# Методы и Подходы",
+        "# Ключевые Результаты и Открытия",
+        "# Ограничения и Проблемы",
+        "# Будущие Направления",
+        "# Заключение",
+    ]
+    if not all(header in review_with_citations for header in required_headers):
+        print("[DEBUG] Итоговый обзор со ссылками потерял структуру, возвращаю исходный обзор без изменений.")
+        return review_text
 
     return review_with_citations
 
 
-def generate_hypotheses_section(final_review, papers_info, topic, num_iterations=2):
+def generate_hypotheses_section(papers_info, topic):
     """
     Генерирует раздел гипотез на основе имеющихся анализов и использованных статей.
     """
@@ -530,38 +610,43 @@ def generate_hypotheses_section(final_review, papers_info, topic, num_iterations
 
     prompt = hypotheses_prompt.format(
         topic=topic,
-        final_review=final_review,
-        papers_info=papers_info_str,
+        final_review=papers_info_str,
     )
     
-    response, _ = get_response_from_llm(
+    hypotheses_text, _ = get_response_from_llm(
         msg=prompt,
         print_debug=False,
+        temperature=0.9,
         rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC,
     )
-    hypotheses_text = extract_response_block(response, label='RESPONSE')
-    print(f"[DEBUG] Изначальный текст раздела гипотезы: {hypotheses_text}\n")
+     
+    print("[DEBUG] Изначальный текст раздела гипотезы создан\n")
 
-    for _ in range(num_iterations):
-        reflection_msg = hypotheses_reflection_prompt.format(
-            topic=topic,
+    critique_text, _ = get_response_from_llm(
+        msg=hypotheses_critic_prompt.format(
             hypotheses=hypotheses_text
-        )
-        response, _ = get_response_from_llm(
-            msg=reflection_msg,
-            print_debug=False,
-            rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC,
-        )
-        if "I am done" in response:
-            improved = extract_response_block(response, label='RESPONSE')
-            if improved:
-                hypotheses_text = improved
-            break
-        improved = extract_response_block(response, label='RESPONSE')
-        print(f"[DEBUG] Улучшенный текст гипотезы: {improved}\n")
+        ),
+        print_debug=False,
+        temperature=0.3,
+        rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC,
+    )
 
-        if improved:
-            hypotheses_text = improved
+    print("[DEBUG] Критика раздела гипотезы\n")
+    
+    rewrite_response, _ = get_response_from_llm(
+        hypotheses_rewrite_prompt.format(
+            hypotheses=hypotheses_text,
+            critique=critique_text
+        ),
+        msg_history=None,
+        rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
+    )
+
+    improved = extract_response_block(rewrite_response, label='RESPONSE')
+    print(f"[DEBUG] Улучшенный текст гипотезы: {improved}\n")
+
+    if improved:
+        hypotheses_text = improved
 
     return hypotheses_text
 
@@ -606,26 +691,25 @@ def perform_grouping_and_analysis(topic, papers, extracted_dir='extracted_info',
     with open(output_path / 'final_review_no_citations.txt', 'w', encoding='utf-8') as f:
         f.write(final_review)
     
-    # Генерируем раздел гипотез и дальнейших исследований на основе пробелов и 10 статей
-    print("[DEBUG] Генерирую раздел гипотез и дальнейших исследований")
-    hypotheses_text = generate_hypotheses_section(final_review, papers_info, topic, num_iterations=2)
-    final_review = final_review.strip() + "\n\n# Гипотезы и дальнейшие исследования\n\n" + hypotheses_text
-
-    # Сохраняем обзор без ссылок, уже с разделом гипотез
-    with open(output_path / 'final_review_no_citations.txt', 'w', encoding='utf-8') as f:
-        f.write(final_review)
-
     # Добавляем ссылки на статьи
     print("[DEBUG] Добавляю ссылки на статьи в обзор")
     final_review_with_citations = add_citations_to_review(final_review, papers_info, topic, num_iterations=3)
     
     # Сохраняем итоговый обзор со ссылками
-    with open(output_path / 'final_review.txt', 'w', encoding='utf-8') as f:
+    with open(output_path / 'final_review_with_citations.txt', 'w', encoding='utf-8') as f:
         f.write(final_review_with_citations)
     
-    print(f"[DEBUG] Анализ завершен. Результаты сохранены в {output_dir}")
-    return final_review_with_citations
+    # Генерируем раздел гипотез и дальнейших исследований на основе пробелов и 10 статей
+    print("[DEBUG] Генерирую раздел гипотез и дальнейших исследований")
+    hypotheses_text = generate_hypotheses_section(papers_info, topic)
+    review = final_review_with_citations.strip() + "\n\n# Гипотезы и дальнейшие исследования\n\n" + hypotheses_text
 
+    # Сохраняем обзор уже с разделом гипотез
+    with open(output_path / 'final_review.txt', 'w', encoding='utf-8') as f:
+        f.write(review)
+    
+    print(f"[DEBUG] Анализ завершен. Результаты сохранены в {output_dir}")
+    return review
 
 # Промпт для извлечения информации из статьи
 extraction_prompt = """
@@ -644,7 +728,9 @@ extraction_prompt = """
 Отвечай только объектом JSON, без дополнительного текста. Объект JSON выделяется таким блоком: ```json  ```
 
 Текст статьи:
+=== НАЧАЛО ТЕКСТА СТАТЬИ ===
 {text}
+=== КОНЕЦ ТЕКСТА СТАТЬИ ===
 """
 
 
@@ -653,7 +739,9 @@ extraction_quality_check_prompt = """
 Оцени извлеченную информацию из статьи. Проверьте точность, полноту и согласованность с оригинальным текстом.
 
 Извлеченная информация:
+=== НАЧАЛО ИНФОРМАЦИИ ===
 {extracted_json}
+=== КОНЕЦ ИНФОРМАЦИИ ===
 
 Дай обратную связь и предложи улучшения. Если информация удовлетворительна, напиши "ПРИНЯТО". В противном случае, предоставь исправленный JSON.
 Отвечай либо "ПРИНЯТО", либо исправленным JSON.
@@ -683,7 +771,9 @@ group_papers_by_subtopics_prompt = """
 }}
 
 Извлеченная ключевая информация по статьям:
+=== НАЧАЛО КЛЮЧЕВОЙ ИНФОРМАЦИИ ===
 {papers_summary_text}
+=== КОНЕЦ КЛЮЧЕВОЙ ИНФОРМАЦИИ ===
 
 Отнеси каждую статью ТОЛЬКО К ОДНОЙ ПОДТЕМЕ. Отвечай только объектом JSON.
 """
@@ -729,7 +819,9 @@ group_analysis_prompt = """
 - Делай акцент на сравнении, синтезе и связях.
 
 Статьи в этой группе:
+=== НАЧАЛО ТЕКСТА СТАТЕЙ ===
 {papers_combined}
+=== КОНЕЦ ТЕКСТА СТАТЕЙ ===
 
 Пиши анализ в структурированном формате с четкими заголовками, начиная каждый раздел с ##.
 """
@@ -811,87 +903,123 @@ RESPONSE:
 ВКЛЮЧАЙ "I am done" ТОЛЬКО ЕСЛИ ТЫ НЕ ДЕЛАЕШЬ ИЗМЕНЕНИЙ.
 """
 
-# Промпт для добавления ссылок на статьи в обзор
-add_citations_prompt = """
-Ты — агент, отвечающий за добавление ссылок на статьи в готовый обзор.
 
-У тебя есть обзорная статья по теме "{topic}" без ссылок [CITATION: ...], и набор статей, которые использовались для его написания.
-Твоя задача: добавить ссылки только в те места, где они действительно нужны для подтверждения важных утверждений или прямых отсылок к работам.
+# Промпт для добавления ссылок в одну секцию обзора
+section_citation_prompt = """
+Ты — агент, добавляющий ссылки на статьи в один раздел обзорной статьи по теме "{topic}".
+
+Раздел:
+=== НАЧАЛО ТЕКСТА РАЗДЕЛА ДАННЫХ ===
+{section_text}
+=== КОНЕЦ ТЕКСТА РАЗДЕЛА ДАННЫХ ===
+
+Ниже справочные данные о статьях. Это контекст для анализа, НЕ копируй этот текст дословно в обзор. Используй его только как источник фактов.
+
+=== НАЧАЛО СПРАВОЧНЫХ ДАННЫХ ===
+{papers_info}
+=== КОНЕЦ СПРАВОЧНЫХ ДАННЫХ ===
+
+Задача: добавь ссылки [CITATION: arxiv_id | название статьи] только в тех местах, где это нужно для подтверждения важных утверждений или прямых ссылок на работы.
 
 ВАЖНО:
-- Не меняй текст обзора больше, чем необходимо.
-- Не переставляй строки и не переписывай фразы.
-- Не добавляй новые идеи, не удаляй ничего.
-- Добавляй ссылки только после значимых утверждений или сравнений.
-- Ссылки должны быть в формате: [CITATION: arxiv_id | название статьи]
+- Не меняй смысл и структуру раздела.
+- Используй ТОЧНЫЕ arxiv_id и названия.
+- Не добавляй новые идеи.
+- Не переписывай предложения.
+- Сохрани заголовок раздела в начале.
+- Если ссылки не нужны, оставь раздел без изменений.
+- Писать ТОЛЬКО на русском, кроме названий статей, на которые ссылаешься и терминов. Предложения на английском запрещены. 
 
 Отвечай строго в формате:
 
 THOUGHT:
-<кратко, какие ссылки ты добавил и почему>
+<что сделано>
 
 RESPONSE:
 ```
-<полный текст обзора с добавленными ссылками>
+<тот же раздел с добавленными ссылками>
 ```
 
-Текст обзора БЕЗ ССЫЛОК:
-{review_text}
-
-Доступные статьи (используй ТОЧНЫЕ arxiv_id и названия):
-{papers_info}
+НЕ ПИШИ ссылки там, где нет прямых отсылок к работам, НЕ вставляй бездумно ссылки. НЕ пиши содержание из списка доступных статей.
 """
 
 # Промпт для генерации раздела гипотез и дальнейших исследований
-hypotheses_prompt = """
-Ты — амбициозный научный исследователь, который анализирует итоговый обзор по теме "{topic}" и 10 использованных статей и хочет выдвинуть новые, новаторские, актуальные гипотезы, сформулированные в виде названий научных статей, дальнейшее исследование которых внесло бы значительный вклад в область "{topic}".
-
-Твоя задача: на основе итоговой обзорной статьи и ключевых элементов статей, по которым писался итоговый обзор, сформулировать 2-3 конкретные и новаторские исследовательские гипотезы в виде названий научных статей, по которым можно провести дальнейшее исследование. Все гипотезы записываются в виде раздела "Гипотезы для дальнейшего исследлования", который затем будет добавлен к итоговому обзору всей темы. 
+hypotheses_prompt = '''
+На основе обзорной статьи по теме {topic} тебе нужно написать в нее раздел "Гипотезы и дальнейшее исследование". 
+В разделе нужно предложить 1-2 гипотезы, связанные с темой, которые будут новыми, ранее не исследованными и не рассмотренными. 
+Гипотеза должна включать в себя конкретный вопрос для исследования, быть сформулирована как название статьи и иметь описание, что в ней предлагается сделать и в чем ее новизна. 
+Например, в теме "2d diffusion" гипотеза могла бы быть "Diffusion Experts: A Single Model with Multiple Specialists for Improved Mode Coverage" с описанием "Implement a single diffusion model with multiple 'experts' that specialize in different aspects of the data distribution. Use a gating mechanism to select the most relevant expert for each input. Evaluate performance using estimated KL divergence, mode coverage, and visual inspection."
 
 Требования:
-- Гипотезы должны быть достаточно узкими и практичными и сформулированы в виде названия статей.
-- Гипотеза НЕ должна существенно пересекаться с существующей литературой или быть уже хорошо изученной.
-- В разделе ты должен объяснить, почему каждая гипотеза является новой и не покрыта текущей литературой.
-- Укажи, какие пробелы в литературе поддерживают каждую гипотезу.
+- Название каждой гипотезы должно быть сформулировано в виде названия научной статьи.
+- Гипотезы НЕ должны существенно пересекаться с существующей литературой или быть уже хорошо изученными.
+- Раздел назови "Гипотезы для дальнейшего исследования", напиши почему каждая гипотеза является новой и не покрыта в использованной литературе.
 - Не генерируй шаблонные идеи, фокусируйся на слепых зонах, выявленных из предоставленных статей.
-- Отвечай в формате текста, готового для раздела обзора.
-- Отвечай ТОЛЬКО на русском.
 
-Отвечай СТРООГО в формате:
-
-THOUGHT:
-<кратко, почему ты выбрал именно эти гипотезы>
-
-RESPONSE:
-```
-<текст раздела "Гипотезы для дальнейшего исследования">
-```
+Пиши только текст раздела. 
 
 Текст итогового обзора: 
+=== НАЧАЛО ТЕКСТА ИТОГОВОГО ОБЗОРА ===
 {final_review}
+=== КОНЕЦ ТЕКСТА ИТОГОВОГО РАЗБОРА ===
+'''
 
-Информация о каждой из 10 использованных статей:
-{papers_info}
-"""
 
-hypotheses_reflection_prompt = """
-У тебя есть написанный раздел "Гипотезы для дальнейшего исследования", в которых описаны гипотезы и идеи в виде названий научных статей с пояснениями, почему они могут быть новаторскими и актуальными. 
-Ты хочешь проверить, новы эти гипотезы или нет. То есть, не пересекаются ли они существенно с существующей литературой или уже хорошо изучены.
-Будь строгим критиком новизны, убедись, что в этой гипотезе или идее содержится достаточный вклад в область исследования.
+hypotheses_critic_prompt = '''
+Проанализируй предложенные гипотезы как научный критик. Будь строг к их новизне. 
+
+Раздел "Гипотезы для дальнейшего исследования":
+
+=== НАЧАЛО ТЕКСТА РАЗДЕЛА ===
+{hypotheses}
+=== КОНЕЦ ТЕКСТА РАЗДЕЛА ===
+
+Проверь:
+
+1. Есть ли банальные или очевидные идеи
+2. Есть ли идеи, уже фактически присутствующие в обзоре или общеизвестны
+3. Какие гипотезы недостаточно новы
+4. Какие гипотезы слишком общие
+5. Как усилить новизну и экспериментальную проверяемость
+
+Дай конструктивный критический отзыв.
+
+Пиши только критику и рекомендации по улучшению.
+'''
+
+
+hypotheses_rewrite_prompt = '''
+Ниже привиден исходный текст раздела "Гипотезы для дальнейшего исследования":
+
+=== НАЧАЛО ТЕКСТА РАЗДЕЛА ===
+{hypotheses}
+=== КОНЕЦ ТЕКСТА РАЗДЕЛА ===
+
+Ниже критические замечания к этому разделу:
+
+=== НАЧАЛО ТЕКСТА ЗАМЕЧАНИЙ ===
+{critique}
+=== КОНЕЦ ТЕКСТА ЗАМЕЧАНИЙ ===
+
+Перепиши раздел "Гипотезы для дальнейшего исследования", улучшив:
+- новизну
+- конкретность
+- научную ценность
+- экспериментальную проверяемость
+- исправив критические замечания
+
+Если гипотеза хорошая — сохрани её. Если слабая — переработай. НИЧЕГО НЕ пиши, кроме улучшенного текста раздела, без выводов и комментариев, только текст раздела.
+
+Ответ СТРОГО в формате:
 
 THOUGHT:
-<размышления о том, как улучшить гипотезы и обоснование>
+<краткое объяснение изменений>
 
 RESPONSE:
 ```
-<улучшенный текст раздела "Гипотезы для дальнейшего исследования">
+<улучшенный финальный раздел гипотез>
 ```
-
-Текст раздела "Гипотезы для дальнейшего исследования": 
-{hypotheses}
-
-Если после анализа новизны ты решил, что раздел написан хорошо, не требует изменений, а гипотезы новы и актуальны, то включи "I am done" в THOUGHT и верни ТОЧНО ТАКОЙ ЖЕ текст раздела в RESPONSE.  
-"""
+'''
 
 
 if __name__ == "__main__":
@@ -1354,28 +1482,24 @@ Re4:
 
 В заключение, будущее многоагентных систем в науке лежит в смещении фокуса от простого анализа существующих данных к автономной генерации новых гипотез и исследовательских вопросов. Будущие исследования должны сосредоточиться на создании более сложных моделей, способных не только обрабатывать существующие знания, но и самостоятельно формулировать исследовательские цели. Это потребует разработки систем, способных к самокоррекции, повышению точности моделей и обеспечению прозрачности процесса открытия, тем самым трансформируя МАС из инструментов автоматизации в полноценные агенты научного открытия.
 
-# Гипотезы и дальнейшие исследования
-
-Пожалуйста, предоставьте раздел "Гипотезы и дальнейшие исследования", который вы хотите, чтобы я проверил. Я применю роль строгого научного критика, чтобы оценить новизну, актуальность и потенциальный вклад ваших идей в область исследования.'''
+'''
     papers_info = load_extracted_info([ArxivPaper('2510.24339v2', None, None, None, None, None, None, None, None), ArxivPaper('2503.23314v2', None, None, None, None, None, None, None, None), ArxivPaper('2503.07044v2', None, None, None, None, None, None, None, None), ArxivPaper('2603.03372v2', None, None, None, None, None, None, None, None), ArxivPaper('2508.20729v2', None, None, None, None, None, None, None, None), ArxivPaper('2510.15624v1', None, None, None, None, None, None, None, None), ArxivPaper('2512.24189v1', None, None, None, None, None, None, None, None), ArxivPaper('2506.02931v1', None, None, None, None, None, None, None, None), ArxivPaper('2510.01293v1', None, None, None, None, None, None, None, None), ArxivPaper('2505.12039v1', None, None, None, None, None, None, None, None)])
-
-    print("[DEBUG] Генерирую раздел гипотез и дальнейших исследований")
-    hypotheses_text = generate_hypotheses_section(group_analyses, papers_info, topic, num_iterations=2)
-    print(f"[DEBUG] Текст раздела гипотез: {hypotheses_text}\n")
-    final_review = final_review.strip() + "\n\n# Гипотезы и дальнейшие исследования\n\n" + hypotheses_text
-
-    input()
-
-    # Сохраняем обзор без ссылок, уже с разделом гипотез
-    with open(output_path / 'final_review_no_citations.txt', 'w', encoding='utf-8') as f:
-        f.write(final_review)
 
     # Добавляем ссылки на статьи
     print("[DEBUG] Добавляю ссылки на статьи в обзор")
     final_review_with_citations = add_citations_to_review(final_review, papers_info, topic, num_iterations=3)
     
     # Сохраняем итоговый обзор со ссылками
-    with open(output_path / 'final_review.txt', 'w', encoding='utf-8') as f:
+    with open(output_path / 'final_review_with_citations.txt', 'w', encoding='utf-8') as f:
         f.write(final_review_with_citations)
+
+    print("[DEBUG] Генерирую раздел гипотез и дальнейших исследований")
+    hypotheses_text = generate_hypotheses_section(papers_info, topic)
+    print(f"[DEBUG] Текст раздела гипотез: {hypotheses_text}\n")
+    review = final_review_with_citations.strip() + "\n\n# Гипотезы и дальнейшие исследования\n\n" + hypotheses_text
+
+    # Сохраняем обзор с разделом гипотез
+    with open(output_path / 'final_review.txt', 'w', encoding='utf-8') as f:
+        f.write(review)
     
     print(f"[DEBUG] Анализ завершен. Результаты сохранены в {output_dir}")
