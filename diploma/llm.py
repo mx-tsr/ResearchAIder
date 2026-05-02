@@ -1,43 +1,13 @@
-import os
 import re
 import time
 import backoff
-from dotenv import load_dotenv
 from openai import OpenAI, RateLimitError, APITimeoutError, APIError
 
-load_dotenv()
+from config import OPENROUTER_APIS, OPENROUTER_API_RATE_LIMIT_SEC
+from utils import load_logger
 
-OPENROUTER_API_RATE_LIMIT_SEC = 3.0 
-# MAX_NUM_TOKENS = 16384
-OPENROUTER_API_BASE_URL = os.getenv("OPENROUTER_API_BASE_URL")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL")
 
-OPENROUTER_API_KEY_FALLBACK_1 = os.getenv("OPENROUTER_API_KEY_FALLBACK_1")
-OPENROUTER_API_KEY_FALLBACK_2 = os.getenv("OPENROUTER_API_KEY_FALLBACK_2")
-OPENROUTER_API_KEY_FALLBACK_3 = os.getenv("OPENROUTER_API_KEY_FALLBACK_3")
-OPENROUTER_API_KEY_FALLBACK_4 = os.getenv("OPENROUTER_API_KEY_FALLBACK_4")
-OPENROUTER_API_KEY_FALLBACK_5 = os.getenv("OPENROUTER_API_KEY_FALLBACK_5")
-
-OLLAMA_API_BASE_URL = os.getenv("OLLAMA_API_BASE_URL")
-OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL")
-
-# Список API конфигураций: [(key, url, model), ...]
-# OPENROUTER_APIS = []
-OPENROUTER_APIS = [(OPENROUTER_API_KEY, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL)]
-if OPENROUTER_API_KEY_FALLBACK_1:
-    OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_1, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL))
-if OPENROUTER_API_KEY_FALLBACK_2:
-    OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_2, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL))
-if OPENROUTER_API_KEY_FALLBACK_3:
-    OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_3, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL))
-if OPENROUTER_API_KEY_FALLBACK_4:
-    OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_4, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL))
-if OPENROUTER_API_KEY_FALLBACK_5:
-    OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_5, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL))
-if OLLAMA_API_KEY:
-    OPENROUTER_APIS.append((OLLAMA_API_KEY, OLLAMA_API_BASE_URL, OLLAMA_MODEL))
+logger = load_logger()
 
 API_DAILY_LIMIT_EXHAUSTED = [False] * len(OPENROUTER_APIS)
 
@@ -46,7 +16,7 @@ def backoff_handler(details):
     """
     Логирует попытки backoff при rate limit ошибках
     """
-    print("[DEBUG] Попытка #{tries}, ждём {wait:0.1f} сек...".format(**details))
+    logger.info(f"Попытка #{details['tries']}, ждём {details['wait']:.1f} сек...")
 
 
 def clean_text(text):
@@ -129,51 +99,50 @@ def get_response_from_llm(
                 content = clean_text(content)
             new_msg_history = new_msg_history + [{"role": "assistant", "content": content}]
 
-            print(f'[DEBUG] получен ответ от LLM (idx={api_idx+1}, api={api_url}, model={api_model}):\n {"-"*50}\n {content}\n {"-"*50}\n')
-            with open("logs/llm_logs.txt", "a", encoding='utf-8') as file:
-                file.write(f'[DEBUG] получен ответ от LLM (idx={api_idx+1}, api={api_url}, model={api_model}):\n {"-"*50}\n {content}\n {"-"*50}\n\n')
+            logger.info(f'Получен ответ от LLM (idx={api_idx+1}, api={api_url}, model={api_model}):\n {"-"*50}\n {content}\n {"-"*50}\n')
+            # with open("logs/llm_logs.txt", "a", encoding='utf-8') as file:
+            #     file.write(f'[DEBUG] получен ответ от LLM (idx={api_idx+1}, api={api_url}, model={api_model}):\n {"-"*50}\n {content}\n {"-"*50}\n\n')
 
             if print_debug:
-                print()
-                print("*" * 20 + " LLM START " + "*" * 20)
+                logger.info("*" * 20 + " LLM START " + "*" * 20)
                 for j, m in enumerate(new_msg_history):
                     preview = m["content"].replace('\n', ' ')
-                    print(f'{j}, {m["role"]}: {preview}...')
-                print(content)
-                print("*" * 21 + " LLM END " + "*" * 21)
-                print()
+                    logger.info(f'{j}, {m["role"]}: {preview}...')
+                logger.info(content)
+                logger.info("*" * 21 + " LLM END " + "*" * 21)
 
             time.sleep(rate_limit)
 
             return content, new_msg_history
         
         except RateLimitError as e:
-            print(f"[ERROR] Rate limit 429 для API {api_url}: {e}")
+            logger.error(f"Rate limit 429 для API {api_url}: {e}\n")
             last_error = e
 
             if "Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day" in str(e):
                 API_DAILY_LIMIT_EXHAUSTED[api_idx] = True
-                print(f"[DEBUG] API #{api_idx+1} исчерпал дневной лимит")
+                logger.info(f"API #{api_idx+1} исчерпал дневной лимит\n")
                 continue
             else:
                 # Другие RateLimitError обрабатываются через backoff
                 raise
 
         except APITimeoutError as e:
-            print(f"[ERROR] API timeout для API {api_idx} {api_url}: {e}")
+            logger.error(f"API timeout для API {api_idx} {api_url}: {e}\n")
             last_error = e
             raise
 
         except APIError as e:
-            print(f"[ERROR] API error для API {api_idx} {api_url}: {e}")
+            logger.error(f"API error для API {api_idx} {api_url}: {e}\n")
             if "401" in str(e) or "Unauthorized" in str(e):
-                print("Проверьте OPENROUTER_API_KEY в .env")
+                logger.error(f"Проверьте API #{api_idx} в .env\n")
             elif "404" in str(e):
-                print(f"Модель '{api_model}' не найдена")
+                logger.error(f"Модель '{api_model}' не найдена\n")
             last_error = e
             raise
 
     if last_error:
         raise last_error
 
-    raise RuntimeError("[ERROR] ни один LLM API не был вызван")
+    logger.error("Ни один LLM API не был вызван\n")
+    raise RuntimeError("Ни один LLM API не был вызван\n")
