@@ -73,8 +73,8 @@ def generate_final_review(topic, group_analyses, num_iterations=3):
     section_mapping = {
         "Введение": ["Обзор подтемы"],
         "Предметная область": ["Обзор подтемы", "Основные идеи и методы"],
-        "Методы и Подходы": ["Основные идеи и методы", "Сильные стороны и ограничения"],
-        "Ключевые Результаты и Открытия": ["Совпадающие выводы и подтверждающие результаты", "Различия и противоречия"],
+        "Методы и Подходы": ["Основные идеи и методы", "Сильные стороны и ограничения", "Данные и экспериментальные оценки"],
+        "Ключевые Результаты и Открытия": ["Совпадающие выводы и подтверждающие результаты", "Различия и противоречия", "Данные и экспериментальные оценки"],
         "Ограничения и Проблемы": ["Сильные стороны и ограничения", "Различия и противоречия"],
         "Будущие Направления": ["Пробелы исследований и открытые вопросы"],
         "Заключение": ["Ключевые выводы для итогового мета-анализа"]
@@ -100,7 +100,8 @@ def generate_final_review(topic, group_analyses, num_iterations=3):
                     ),
                     print_debug=False,
                     msg_history=None,  # Сброс истории для первичной генерации
-                    rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
+                    rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC,
+                    stage='writeup_agent'
                 )
                 section_content = response
             else:
@@ -116,7 +117,8 @@ def generate_final_review(topic, group_analyses, num_iterations=3):
                     ),
                     print_debug=False,
                     msg_history=limited_msg_history,
-                    rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
+                    rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC,
+                    stage='writeup_agent'
                 )
                 
                 new_section_content = extract_response_block(response)
@@ -149,7 +151,8 @@ def generate_final_review(topic, group_analyses, num_iterations=3):
         ),
         print_debug=False,
         msg_history=msg_history,
-        rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
+        rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC,
+        stage='writeup_agent'
     )
     
     new_full_review = extract_response_block(response)
@@ -285,6 +288,7 @@ def generate_hypotheses_section(topic, extracted_info_from_papers):
         print_debug=False,
         temperature=0.9,
         rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC,
+        stage='writeup_agent'
     )
      
     logger.info("Изначальный текст раздела гипотезы создан. Начинаю его оценку\n")
@@ -296,6 +300,7 @@ def generate_hypotheses_section(topic, extracted_info_from_papers):
         print_debug=False,
         temperature=0.3,
         rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC,
+        stage='writeup_agent'
     )
 
     logger.info("Оценка раздела гипотезы сделана. Начинаю улучшение\n")
@@ -306,7 +311,8 @@ def generate_hypotheses_section(topic, extracted_info_from_papers):
             critique=critique_text
         ),
         msg_history=None,
-        rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
+        rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC,
+        stage='writeup_agent'
     )
 
     improved_hypotheses_text = extract_response_block(rewrite_response, label='RESPONSE')

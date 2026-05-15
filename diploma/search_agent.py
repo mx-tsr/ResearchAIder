@@ -5,22 +5,18 @@ import time
 import json
 import re
 import requests
+import backoff
 from dataclasses import dataclass, asdict
+from pathlib import Path
 from typing import List, Optional
 import xml.etree.ElementTree as ET
+from config import ARXIV_API_URL, ARXIV_API_RATE_LIMIT_SEC, CACHE_FILE, CACHE_ARXIV_TTL
 
 from llm import get_response_from_llm
 from utils import load_logger
 
 
 logger = load_logger()
-
-
-ARXIV_API_URL = 'http://export.arxiv.org/api/query'  # базовый URL для запросов к arXiv API
-ARXIV_API_RATE_LIMIT_SEC = 3.0  # документация arxiv просит делать не чаще 1 запроса в 3 секунды
-CACHE_FILE = 'cache/arxiv_cache.json'  # файл для кэширования результатов запросов к arXiv
-CACHE_ARXIV_TTL = 24  # время, через которое будет обновляться кэш обращений к arxiv
-
 
 @dataclass
 class ArxivPaper:
@@ -45,6 +41,7 @@ class ArxivPaper:
     doi: Optional[str]
     pdf_url: str
     source_url: str
+    local_pdf_path: Optional[str] = None
 
 
 def arxiv_paper_from_dict(data):
@@ -61,7 +58,97 @@ def arxiv_paper_from_dict(data):
         doi=data.get('doi'),
         pdf_url=data.get('pdf_url', ''),
         source_url=data.get('source_url', ''),
+        local_pdf_path=data.get('local_pdf_path', '')
     )
+
+
+def get_local_pdf_paths(input_dir='diploma/input_papers', max_papers=10):
+    """
+    Возвращает список локальных PDF-файлов из папки input_papers
+    """
+    local_pdf_dir = Path(input_dir)
+    if not local_pdf_dir.exists():
+        return []
+
+    pdf_paths = sorted(local_pdf_dir.glob('*.pdf'), key=lambda p: p.name)[:max_papers]
+    if len(pdf_paths) > max_papers:
+        logger.warning(f'Найдено больше {max_papers} локальных PDF. Использую только первые {max_papers} файлов.')
+    return pdf_paths
+
+
+def extract_text_from_pdf_first_pages(pdf_path):
+    """
+    Извлекает текст из первых страниц PDF для определения заголовка и аннотации
+    """
+    text = ''
+    try:
+        import pymupdf4llm
+        text = pymupdf4llm.to_markdown(str(pdf_path), pages=[0, 1])
+
+        if len(text) > 50:
+            return text
+    except Exception as e:
+        logger.error(f'pymupdf не смог прочитать {pdf_path}: {e}')
+
+    return text
+
+
+def parse_title_abstract_from_text(text, pdf_path):
+    """
+    Возвращает заголовок и аннотацию из текста PDF
+    """
+    # если текст не извлекся, вернуть название файла
+    if not text:
+        return pdf_path.stem, ''
+
+    title = ''
+    abstract = ''
+
+    # Убираем ** с обеих сторон
+    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+    
+    title = ''.join(' '.join(text.split('#')[1:3]).split('\n')[0])
+
+    start_of_text = text.lower().find('abstract')
+    end_of_text = None
+    if text.lower().find('introduction') != -1:
+        end_of_text = text.lower().find('introduction')
+    elif text.lower().find('keywords') != -1:
+        end_of_text = text.lower().find('keywords')
+
+    if not end_of_text:
+        # попробуем взять первые 250 слов после названия
+        abstract = text[start_of_text:start_of_text + 1500]
+    else:
+        abstract = text[start_of_text:end_of_text]
+
+    if not title:
+        title = pdf_path.stem
+
+    return title.strip(), abstract.strip()
+
+
+def load_local_papers(input_dir='diploma/input_papers', max_papers=10):
+    """
+    Загружает локальные PDF из папки input_papers и возвращает их как ArxivPaper
+    """
+    local_papers = []
+    pdf_paths = get_local_pdf_paths(input_dir=input_dir, max_papers=max_papers)
+    for path in pdf_paths:
+        title, abstract = parse_title_abstract_from_text(extract_text_from_pdf_first_pages(path), path)
+        local_papers.append(ArxivPaper(
+            arxiv_id=path.stem,
+            title=title,
+            abstract=abstract,
+            authors=[],
+            published='',
+            updated='',
+            doi=None,
+            pdf_url=str(path),
+            source_url=str(path),
+            local_pdf_path=str(path)
+        ))
+    return local_papers
 
 
 def rate_limit_sleep(extra=0.2):
@@ -160,21 +247,47 @@ def format_search_query(topic, field='all'):
     return f"{field}:{query}"
 
 
-def expand_topic_queries(topic, max_number_of_query_variants=7):
+def arxiv_backoff_handler(details):
+    """
+    Логирует попытки backoff при rate limit ошибках
+    """
+    logger.info(f"arXiv Попытка #{details['tries']}, ждём {details['wait']:.1f} сек...")
+
+
+@backoff.on_exception(backoff.expo, requests.exceptions.HTTPError, max_time=90, raise_on_giveup=False, logger=None, on_backoff=arxiv_backoff_handler)
+def fetch_arxiv_response(params):
+    response = requests.get(ARXIV_API_URL, params=params)
+    if response.status_code == 429:
+        logger.error(f'arXiv API вернуло 429 Too Many Requests')
+        rate_limit_sleep(ARXIV_API_RATE_LIMIT_SEC)
+        raise requests.exceptions.HTTPError("429 Too Many Requests", response=response)
+    return response
+
+
+def expand_topic_queries(topic, abstract='', max_number_of_query_variants=7):
     '''
     Расширяет исходную тему, заданную пользователем, генерируя несколько похожих для семантического поиска
     '''
     expanded_queries = []
     expanded_queries.append(format_search_query(topic, 'all'))
 
+    prompt = expand_topic_prompt.format(
+        topic=topic, 
+        max_number_of_query_variants=max_number_of_query_variants - 1
+    )
+
+    if abstract: 
+        prompt += f'''Для помощи в выборе самых релевантных статей так же используй эту аннотацию, которая направит на область исследований:
+        === НАЧАЛО АННОТАЦИИ ===
+        {abstract}
+        === КОНЕЦ АННОТАЦИИ ==='''
+
     msg, _ = get_response_from_llm(
-        expand_topic_prompt.format(
-            topic=topic, 
-            max_number_of_query_variants=max_number_of_query_variants - 1
-            ),
+        prompt,
         print_debug=False,
         msg_history=None,
-        temperature=0.1
+        temperature=0.1,
+        stage='search_agent'
     )
 
     expanded_queries.extend(map(format_search_query, msg.rstrip().split('\n')[:max_number_of_query_variants - 1]))
@@ -193,16 +306,24 @@ def search_arxiv(query, max_results=20, start=0, sort_by='relevance', sort_order
         'sortOrder': sort_order,
     }
 
-    response = requests.get(ARXIV_API_URL, params=params, timeout=30)
-    if response.status_code != 200:
-        raise RuntimeError(f'[ERROR] arXiv API вернуло статус {response.status_code}: {response.text[:400]}')
+    try:
+        response = fetch_arxiv_response(params)
+        if response is None:
+            return []
+        if response.status_code != 200:
+            logger.warning(f'arXiv API вернуло статус {response.status_code} при запросе {query}')
+            return []
 
-    papers = parse_arxiv_atom(response.content)
-    rate_limit_sleep()
-    return papers
+        papers = parse_arxiv_atom(response.content)
+        rate_limit_sleep()
+        return papers
+
+    except Exception as e:
+        logger.error(f'Ошибка при обращении к arXiv для запроса "{query}": {e}. Пропускаю и продолжаю.')
+        return []
 
 
-def get_set_number_of_papers(topic, num_of_selected_papers=10, total_num_of_papers=70, num_of_expanded_queries=7, papers_per_query=10, store_path=None):
+def get_set_number_of_papers(topic, abstract='', num_of_selected_papers=10, total_num_of_papers=70, num_of_expanded_queries=7, papers_per_query=10, store_path=None, local_papers_dir='diploma/input_papers', max_local_papers_num=10):
     '''
     Возвращает заданное количество статей по теме. Сначала расширяет тему, потом ищет статьи по каждому расширенному запросу, затем выбирает из них заданное количество наиболее релевантных.
     '''
@@ -218,7 +339,21 @@ def get_set_number_of_papers(topic, num_of_selected_papers=10, total_num_of_pape
         if now - cached_time < timedelta(hours=CACHE_ARXIV_TTL):
             selected_papers = [arxiv_paper_from_dict(p) for p in cache[topic_hash]['selected_papers']]
             logger.info(f'Найден кэш для темы, полученный в течение последних {CACHE_ARXIV_TTL} часов, возвращаю его:\n {[p.arxiv_id for p in selected_papers][:1]} ...\n')
-            return selected_papers
+            
+            # Проверить локальные статьи из кэша, если они были выбраны, но файлы не существуют
+            valid_selected = []
+            for p in selected_papers:
+                if getattr(p, 'local_pdf_path', None) and not Path(p.local_pdf_path).exists():
+                    logger.warning(f'Локальная статья {p.arxiv_id} из кэша не найдена, пропускаю\n')
+                    continue
+                valid_selected.append(p)
+            
+            # Добить до нужного числа из arxiv статей из кэша
+            all_arxiv = [arxiv_paper_from_dict(p) for p in cache[topic_hash]['papers']]
+            remaining = [p for p in all_arxiv if p not in valid_selected][:num_of_selected_papers - len(valid_selected)]
+            valid_selected.extend(remaining)
+            
+            return valid_selected
         else:
             logger.info(f'Найден кэш для темы, но он был получен более {CACHE_ARXIV_TTL} часов назад. Обновляю его.\n') 
     else:
@@ -226,7 +361,7 @@ def get_set_number_of_papers(topic, num_of_selected_papers=10, total_num_of_pape
     
     logger.info(f'Начинаю расширение исходной темы\n')
     
-    queries = expand_topic_queries(topic, max_number_of_query_variants=num_of_expanded_queries)
+    queries = expand_topic_queries(topic, abstract, max_number_of_query_variants=num_of_expanded_queries)
     seen = {}
 
     logger.info(f'Расширенные запросы:\n {"\n".join(queries)}\n')
@@ -252,9 +387,24 @@ def get_set_number_of_papers(topic, num_of_selected_papers=10, total_num_of_pape
     all_papers = list(seen.values())
     logger.info(f'Всего найдено {len(all_papers)} уникальных статей\n')
 
+    local_papers = load_local_papers(input_dir=local_papers_dir, max_papers=max_local_papers_num)
+    logger.info(f'Также найдено {len(local_papers)} локальных статей\n')
+
+    for paper in local_papers:
+        if paper.arxiv_id not in seen:
+            seen[paper.arxiv_id] = paper
+
+    all_papers.extend(local_papers)
+
+    if len(all_papers) == 0:
+        logger.error(f'Не было отобрано ни одной статьи с arxiv - возможно вы не подключены к Интернету. Не найдено ни одной статьи в папке {local_papers_dir}. Завершаю работу, нечего анализировать.')
+        raise RuntimeError('Не отобрано ни одной статьи - невозможно провести анализ.')
+
     papers_titles_and_abstracts = "\n\n".join([
         f"ID: {p.arxiv_id}\nTitle: {p.title}\nAbstract: {p.abstract[:500]}..." 
         for p in all_papers])
+
+    logger.info(f'ID, Заголовки и Аннотации всех найденных статей: {papers_titles_and_abstracts}\n')
 
     try:
         top_papers, _ = get_response_from_llm(
@@ -265,7 +415,8 @@ def get_set_number_of_papers(topic, num_of_selected_papers=10, total_num_of_pape
             ),
             print_debug=False,
             msg_history=None,
-            temperature=0.1
+            temperature=0.1,
+            stage='search_agent'
         )
 
         selected_ids = top_papers.rstrip().split('\n')
@@ -334,9 +485,13 @@ select_top_papers_prompt = '''
 
 
 # if __name__ == "__main__":
-#     # Тестирую поиск и отбор релевантных статей
-#     test_topic = 'multiagent systems of science automation'
-#     selected_papers = get_set_number_of_papers(test_topic, num_of_selected_papers=10, total_num_of_papers=70, num_of_expanded_queries=7, papers_per_query=10, store_path='logs/test_arxiv_search_log.json')
-#     print(f'Выбранные статьи по теме "{test_topic}": ')
-#     for paper in selected_papers:
-#         print(f' - {paper["arxiv_id"]}:\n {paper["title"]}\n\nAbstract: {paper["abstract"]}\n\n')
+    # Тестирую поиск и отбор релевантных статей
+    # test_topic = 'multiagent systems of science automation'
+    # selected_papers = get_set_number_of_papers(test_topic, num_of_selected_papers=10, total_num_of_papers=70, num_of_expanded_queries=7, papers_per_query=10, store_path='logs/test_arxiv_search_log.json')
+    # print(f'Выбранные статьи по теме "{test_topic}": ')
+    # for paper in selected_papers:
+    #     print(f'ARXIV_ID: {paper.arxiv_id}\nTITLE: {paper.title}\nABSTRACT: {paper.abstract}\n\n')
+
+    # local_papers = load_local_papers('diploma/input_papers', 10)
+    # for paper in local_papers:
+    #     print(f'ARXIV_ID: {paper.arxiv_id}\nTITLE: {paper.title}\nABSTRACT: {paper.abstract}\n\n')

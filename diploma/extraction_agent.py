@@ -1,5 +1,6 @@
 import json
 import re
+import shutil
 from pathlib import Path
 import pymupdf4llm
 from PyPDF2 import PdfReader
@@ -8,7 +9,7 @@ import requests
 
 from search_agent import ArxivPaper, rate_limit_sleep
 from llm import get_response_from_llm
-from utils import load_logger, extract_json_from_response
+from utils import load_logger, extract_json_from_response, copy_to_current, clear_directory
 
 OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC = 5.0 
 
@@ -54,17 +55,43 @@ def download_pdf(arxiv_id, target_dir='pdfs', timeout=120):
     return str(out_path)
 
 
+def copy_local_pdf(paper, pdf_dir='pdfs'):
+    '''
+    Копирует локальный PDF из input_papers в папку pdfs.
+    '''
+    target_dir = Path(pdf_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    source_path = Path(paper.local_pdf_path)
+    target_path = target_dir / f"{paper.arxiv_id}.pdf"
+
+    if not source_path.exists():
+        logger.warning(f'Локальный PDF не найден: {source_path}\n')
+        return ''
+
+    if target_path.exists() and target_path.stat().st_size > 1024:
+        logger.info(f'Файл {target_path} уже существует, пропускаю копирование\n')
+        return str(target_path)
+
+    shutil.copy2(source_path, target_path)
+    logger.info(f'Скопирован локальный PDF {source_path} в {target_path}\n')
+    return str(target_path)
+
+
 def download_papers(papers, pdf_dir='pdfs'):
     '''
     Скачивает статьи в формате pdf по их arxiv_id и сохраняет в pdf_dir. Возвращает список путей к сохраненным файлам.
+    Для локальных PDF копирует их в папку pdfs вместо скачивания.
     '''
     downloaded_files = []
     for paper in papers:
         try:
-            path = download_pdf(paper.arxiv_id, target_dir=pdf_dir)
+            if getattr(paper, 'local_pdf_path', None):
+                path = copy_local_pdf(paper, pdf_dir=pdf_dir)
+            else:
+                path = download_pdf(paper.arxiv_id, target_dir=pdf_dir)
             downloaded_files.append(path)
         except Exception as e:
-            logger.error(f'Не смог скачать {paper.arxiv_id}: {e}\n')
+            logger.error(f'Не смог получить PDF для {paper.arxiv_id}: {e}\n')
     return downloaded_files
 
 
@@ -76,33 +103,36 @@ def format_pdf_text(text):
     text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
 
     # Оставляем текст между Introduction и Acknowledgements
-    start_of_text = text.lower().find('introduction')
-    end_of_text = None
+    start_of_text = 0
+    if text.lower().find('introduction', 0, 2000) != -1:
+        start_of_text = text.lower().find('introduction')
+    elif text.lower().find('abstract') != -1:
+        start_of_text = text.lower().find('abstract')
+
+    text = text[start_of_text:]
+
+    end_of_text = len(text)
 
     # Сначала обрезаем по Приложению, если возможно
     if text.lower().find('## appendix') != -1:
         end_of_text = text.lower().find('## appendix')
-    elif text.lower().find('appendix') != -1:
-        end_of_text = text.lower().find('appendix')
-    if end_of_text:
+    if end_of_text != len(text):
         text = text[:end_of_text] 
+        
     # Затем обрезаем по содержанию
-    if text.lower().find('acknowledgements') != -1:
-        end_of_text = text.lower().find('acknowledgements')
-    elif text.lower().find('acknowledgement') != -1:
-        end_of_text = text.lower().find('acknowledgement')
-    elif text.lower().find('acknowledgments') != -1:
-        end_of_text = text.lower().find('acknowledgments')
-    elif text.lower().find('acknowledgment') != -1:
-        end_of_text = text.lower().find('acknowledgment')
-    elif text.lower().find('## references') != -1:
-        end_of_text = text.lower().find('## references')
-    elif text.lower().find('references') != -1:
-        end_of_text = text.lower().find('references')
-    
-    if end_of_text:
+    if text.lower().find('acknowledgements', 5000) != -1:
+        end_of_text = text.lower().find('acknowledgements', 5000)
+    elif text.lower().find('acknowledgement', 5000) != -1:
+        end_of_text = text.lower().find('acknowledgement', 5000)
+    elif text.lower().find('acknowledgments', 5000) != -1:
+        end_of_text = text.lower().find('acknowledgments', 5000)
+    elif text.lower().find('acknowledgment', 5000) != -1:
+        end_of_text = text.lower().find('acknowledgment', 5000)
+    elif text.lower().find('## references', 5000) != -1:
+        end_of_text = text.lower().find('## references', 5000)
+
+    if end_of_text != len(text):
         text = text[:end_of_text] 
-    text = text[start_of_text:]
 
     # Удаляем обозначения картинок
     text = re.sub(r'==> picture.*?<==', '', text, flags=re.DOTALL)
@@ -116,6 +146,9 @@ def format_pdf_text(text):
     text = re.sub(r'\n\s*\n', '\n', text)  # убираем пустые строки
     text = re.sub(r' +', ' ', text)  # множественные пробелы
     text = re.sub(r'\*\*(.*?)\*\*', r'\1', text) # ** с двух сторон
+
+    if len(text.split('\n')) > 400:
+        text = '\n'.join(text.split('\n')[:400])  # ограничиваем 400 строками
 
     return text
 
@@ -147,12 +180,14 @@ def extract_text_from_paper_pdf(pdf_path, min_size=100):
     return text
 
 
-def extract_and_save_texts(papers, txt_dir='txts', pdf_dir='pdfs'):
+def extract_and_save_texts(papers, txt_dir='txts', pdf_dir='pdfs', current_txt_dir=None):
     '''
     Извлекает текст из PDF статей и сохраняет его в txt файлы. Возвращает список путей к сохраненным txt файлам.'''
     txt_dir_path = Path(txt_dir)
     txt_dir_path.mkdir(parents=True, exist_ok=True)
-    
+    if current_txt_dir is not None:
+        clear_directory(current_txt_dir)
+
     txt_paths = []
     for paper in papers:
         pdf_path = Path(pdf_dir) / f"{paper.arxiv_id}.pdf"
@@ -164,6 +199,8 @@ def extract_and_save_texts(papers, txt_dir='txts', pdf_dir='pdfs'):
         if txt_path.exists() and txt_path.stat().st_size > 1024:
             logger.info(f"TXT для {paper.arxiv_id} уже существует, пропускаю извлечение\n")
             txt_paths.append(str(txt_path))
+            if current_txt_dir is not None:
+                copy_to_current(txt_path, current_txt_dir)
             continue
         
         text = extract_text_from_paper_pdf(str(pdf_path))
@@ -175,6 +212,8 @@ def extract_and_save_texts(papers, txt_dir='txts', pdf_dir='pdfs'):
         
         txt_paths.append(str(txt_path))
         logger.info(f"Текст для {paper.arxiv_id} сохранён в {txt_path}\n")
+        if current_txt_dir is not None:
+            copy_to_current(txt_path, current_txt_dir)
     
     return txt_paths
 
@@ -192,7 +231,8 @@ def extract_key_info_from_paper(text, num_iterations=3):
             response, msg_history = get_response_from_llm(
                 msg=extraction_prompt.format(text=text),
                 print_debug=False,
-                rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
+                rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC,
+                stage='extraction_agent'
             )
             extracted = extract_json_from_response(response)
         else:
@@ -206,7 +246,8 @@ def extract_key_info_from_paper(text, num_iterations=3):
                     extracted_json=json.dumps(extracted, indent=2)
                 ),
                 print_debug=False,
-                msg_history=msg_history
+                msg_history=msg_history,
+                stage='extraction_agent'
             )
             
             if "ПРИНЯТО" in response.upper():
@@ -220,7 +261,7 @@ def extract_key_info_from_paper(text, num_iterations=3):
     return extracted
 
 
-def extract_key_info_from_papers(papers, output_dir='extracted_info', txt_dir='txts'):
+def extract_key_info_from_papers(papers, output_dir='extracted_info', txt_dir='txts', current_extracted_info_dir=None):
     '''
     Обрабатывает все txt файлы статей в директории и сохраняет извлеченную информацию в JSON.
     '''
@@ -228,6 +269,8 @@ def extract_key_info_from_papers(papers, output_dir='extracted_info', txt_dir='t
 
     output_dir_path = Path(output_dir)
     output_dir_path.mkdir(parents=True, exist_ok=True)
+    if current_extracted_info_dir is not None:
+        clear_directory(current_extracted_info_dir)
 
     for paper in papers:
         txt_path = Path(txt_dir) / f"{paper.arxiv_id}.txt"
@@ -239,6 +282,8 @@ def extract_key_info_from_papers(papers, output_dir='extracted_info', txt_dir='t
 
         if output_path.exists() and output_path.stat().st_size > 1024:
             logger.info(f"json для {paper.arxiv_id} уже существует, пропускаю извлечение\n")
+            if current_extracted_info_dir is not None:
+                copy_to_current(output_path, current_extracted_info_dir)
             continue
 
         with open(txt_path, 'r', encoding='utf-8') as f:
@@ -254,6 +299,8 @@ def extract_key_info_from_papers(papers, output_dir='extracted_info', txt_dir='t
                 json.dump(info, f, indent=2, ensure_ascii=False)
 
             logger.info(f"Ключевая информация для {paper.arxiv_id} сохранена в {output_path}\n")
+            if current_extracted_info_dir is not None:
+                copy_to_current(output_path, current_extracted_info_dir)
         else:
             logger.error(f"Не удалось извлечь информацию из {txt_path}\n")
     
@@ -262,20 +309,40 @@ def extract_key_info_from_papers(papers, output_dir='extracted_info', txt_dir='t
 
 def download_and_extract_arxiv_papers(papers, pdf_dir='pdfs', txt_dir='txts', extracted_info_dir='extracted_info'):
     """
-    Скачивание PDF отобранных статей, извлекает из них текст в txt и визвлекает из них ключевую информацию в формате JSON
+    Скачивание PDF отобранных статей, извлекает из них текст в txt и извлекает из них ключевую информацию в формате JSON
     """
-    
+    pdf_current_dir = Path(pdf_dir) / 'current'
+    txt_current_dir = Path(txt_dir) / 'current'
+    extracted_info_current_dir = Path(extracted_info_dir) / 'current'
+
+    clear_directory(pdf_current_dir)
+    clear_directory(txt_current_dir)
+    clear_directory(extracted_info_current_dir)
+
     logger.info(f'Начинаю скачивание PDF статей\n')
-    
     pdf_paths = download_papers(papers, pdf_dir=pdf_dir)
+
+    for pdf_path in pdf_paths:
+        if pdf_path:
+            copy_to_current(pdf_path, pdf_current_dir)
 
     logger.info(f'Скачано {len(pdf_paths)} PDF статей. Начинаю извлечение текста из PDF\n')
 
-    txt_paths = extract_and_save_texts(papers, txt_dir=txt_dir, pdf_dir='pdfs')
+    txt_paths = extract_and_save_texts(
+        papers,
+        txt_dir=txt_dir,
+        pdf_dir=pdf_dir,
+        current_txt_dir=txt_current_dir
+    )
 
     logger.info(f'Извлечено {len(txt_paths)} txt статей. Начинаю извлечение ключевой информации из txt\n')
 
-    extracted_info_paths = extract_key_info_from_papers(papers, output_dir=extracted_info_dir, txt_dir=txt_dir)
+    extracted_info_paths = extract_key_info_from_papers(
+        papers,
+        output_dir=extracted_info_dir,
+        txt_dir=txt_dir,
+        current_extracted_info_dir=extracted_info_current_dir
+    )
 
     logger.info(f'Извлечена ключевая информация из {len(extracted_info_paths)} статей\n')
 
@@ -288,15 +355,16 @@ extraction_prompt = """
 
 - title: Название статьи
 - problem: Главная проблема или исследовательский вопрос
-- compared_baselines: Какие методы или работы сравниваются в статье и как они соотносятся с предлагаемым подходом
-- results: Ключевые результаты или открытия
+- compared_baselines: Какие методы или работы сравниваются в статье и как они соотносятся с предлагаемым подходом и между собой. 
+- formulas: Если есть, описание используемого математического аппарата, формул, их представление и использование, но пиши формулы не в формате latex - это ломает json.
+- results: Ключевые результаты или открытия, полученные метрики
 - limitations: Любые ограничения, упомянутые в статье
 - novelty: Что новое или уникальное в этой работе
 - key_findings: 1-2 предложения, резюмирующие основные результаты
 - open_questions: Нерешенные вопросы или будущая работа, упомянутая в статье
 - implicit_gaps: Любые пробелы в исследованиях, которые неявно видны из текста, даже если авторы их не выделяют
 
-Отвечай только объектом JSON, без дополнительного текста. Объект JSON выделяется таким блоком: ```json  ```
+Отвечай только объектом JSON и на русском языке, без дополнительного текста, исключай любые кавычки - это ломает json. Объект JSON выделяется таким блоком: ```json  ```
 
 Текст статьи:
 === НАЧАЛО ТЕКСТА СТАТЬИ ===
@@ -308,19 +376,31 @@ extraction_prompt = """
 # Промпт для проверки качества извлечения
 extraction_quality_check_prompt = """
 Оцени извлеченную информацию из статьи. Проверьте точность, полноту и согласованность с оригинальным текстом.
+При необходимости внеси улучшения в извлеченную информацию, которые повысят её точность и полноту в соответсвии с текстом статьи. Если информация представлена полностью, напиши только "ПРИНЯТО". В противном случае, предоставь улучшенную извлеченную информацию в формате JSON:
+
+- title: Название статьи
+- problem: Главная проблема или исследовательский вопрос
+- compared_baselines: Какие методы или работы сравниваются в статье и как они соотносятся с предлагаемым подходом и между собой. 
+- formulas: Если есть, описание используемого математического аппарата, формул, их представление и использование, но пиши формулы не в формате latex - это ломает json.
+- results: Ключевые результаты или открытия, полученные метрики
+- limitations: Любые ограничения, упомянутые в статье
+- novelty: Что новое или уникальное в этой работе
+- key_findings: 1-2 предложения, резюмирующие основные результаты
+- open_questions: Нерешенные вопросы или будущая работа, упомянутая в статье
+- implicit_gaps: Любые пробелы в исследованиях, которые неявно видны из текста, даже если авторы их не выделяют
+
+Отвечай либо "ПРИНЯТО", либо исправленным JSON.
 
 Извлеченная информация:
 === НАЧАЛО ИНФОРМАЦИИ ===
 {extracted_json}
 === КОНЕЦ ИНФОРМАЦИИ ===
 
-Дай обратную связь и предложи улучшения. Если информация удовлетворительна, напиши "ПРИНЯТО". В противном случае, предоставь исправленный JSON.
-Отвечай либо "ПРИНЯТО", либо исправленным JSON.
 """
 
 
-if __name__ == "__main__":
-    user_topic = 'multiagent systems of science automation'
+# if __name__ == "__main__":
+#     user_topic = 'multiagent systems of science automation'
         
     # Тестирую полный цикл поиска статей, скачивания и извлечения
     # from search_agent import get_set_number_of_papers

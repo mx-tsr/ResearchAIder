@@ -34,7 +34,8 @@ def group_papers_by_subtopics(topic, extracted_info_from_papers):
             ),
         print_debug=False,
         temperature=0.1,
-        rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
+        rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC,
+        stage='analysis_agent'
     )
     groups = extract_json_from_response(response)
     logger.info(f"Результат первичной группировки: {groups}\n")
@@ -52,7 +53,7 @@ def group_papers_by_subtopics(topic, extracted_info_from_papers):
     missing = expected_papers - all_paper_ids
     extra = all_paper_ids - expected_papers
     
-    if missing or duplicates or extra:
+    if missing or duplicates or extra or len(groups.items()) > 5:
         # Фидбек для улучшения
         feedback = ""
         if missing:
@@ -61,6 +62,8 @@ def group_papers_by_subtopics(topic, extracted_info_from_papers):
             feedback += f"Дубликаты статей: {duplicates}. "
         if extra:
             feedback += f"Лишние статьи: {list(extra)}. "
+        if len(groups.items()) > 5:
+            feedback += f"Групп создано {len(groups.items())}, что больше 5. Необходимо сократить до 5 или меньше. "
         
         logger.info(f'Фидбек для улучшения групп: {feedback}')
 
@@ -71,7 +74,8 @@ def group_papers_by_subtopics(topic, extracted_info_from_papers):
             ),
             print_debug=False,
             temperature=0.1,
-            rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
+            rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC,
+            stage='analysis_agent'
         )
         groups = extract_json_from_response(response)
         logger.info(f"Результат повторной группировки: {groups}\n")
@@ -91,7 +95,7 @@ def generate_group_analysis(extracted_info_from_papers, group_name, paper_ids, t
     
     group_papers_summary = []
     for paper in group_papers:
-        paper_text = f"Title: {paper['title']}\nProblem: {paper['problem']}\nCompared baselines: {paper['compared_baselines']}\nResults: {paper['results']}\nLimitations: {paper['limitations']}\nNovelty: {paper['novelty']}\nkey_findings: {paper['key_findings']}\nopen_questions: {paper['open_questions']}"
+        paper_text = f"Title: {paper['title']}\nProblem: {paper['problem']}\nCompared baselines: {paper['compared_baselines']}\nFormulas: {paper['formulas']}\nResults: {paper['results']}\nLimitations: {paper['limitations']}\nNovelty: {paper['novelty']}\nkey_findings: {paper['key_findings']}\nopen_questions: {paper['open_questions']}"
         group_papers_summary.append(paper_text)
     group_papers_text = "\n\n".join(group_papers_summary)
     
@@ -109,7 +113,8 @@ def generate_group_analysis(extracted_info_from_papers, group_name, paper_ids, t
                 ),
                 print_debug=False,
                 msg_history=msg_history,
-                rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
+                rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC,
+                stage='analysis_agent'
             )
             analysis = response
         else:
@@ -128,7 +133,8 @@ def generate_group_analysis(extracted_info_from_papers, group_name, paper_ids, t
                 msg=reflection_prompt,
                 print_debug=False,
                 msg_history=msg_history,
-                rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC
+                rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC,
+                stage='analysis_agent'
             )
             
             analysis = extract_response_block(response)
@@ -249,22 +255,22 @@ group_analysis_prompt = """
 Какую исследовательскую область покрывают работы? Почему направление важно?
 
 ## Основные идеи и методы
-Какие подходы предлагаются? Сгруппируй методы по типам. Сравнивай подходы между собой.
+Какие подходы предлагаются? Сгруппируй методы по типам. Сравнивай подходы между собой. Проводи синтез, а не простой пересказ.
 
 ## Совпадающие выводы и подтверждающие результаты
-Какие идеи подтверждаются несколькими работами? Указывай какие статьи это подтверждают.
+Какие идеи подтверждаются несколькими работами? Указывай какие статьи это подтверждают. Приводи метрики, измерения или формулы. 
 
 ## Различия и противоречия
-Где статьи расходятся? Чем объясняются различия?
+Где статьи расходятся? Чем объясняются различия? Приводи метрики, измерения или формулы. 
 
 ## Сильные стороны и ограничения
 Сравни преимущества и недостатки подходов. Отрази ограничения, упомянутые в работах.
 
 ## Данные и экспериментальные оценки
-Какие датасеты, метрики и способы оценки используются? Что общего и что различается?
+Какие датасеты, метрики и способы оценки используются? Что общего и что различается? Как по метрикам можно оценить ту или иную технологию / метод?
 
 ## Пробелы исследований и открытые вопросы
-Что остается нерешенным? Какие направления изучены недостаточно?
+Что остается нерешенным? Какие направления изучены недостаточно? Какие места не покрываются работами?
 
 ## Ключевые выводы для итогового мета-анализа
 Какие выводы важно сохранить для дальнейшего построения обзорной статьи?

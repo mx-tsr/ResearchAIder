@@ -3,7 +3,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# нвстройки основного OpenRouter API
+# настройки OpenRouter API
+# настройки основного OpenRouter API
 OPENROUTER_API_RATE_LIMIT_SEC = 3.0
 OPENROUTER_API_BASE_URL = os.getenv("OPENROUTER_API_BASE_URL")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -15,6 +16,7 @@ OPENROUTER_API_KEY_FALLBACK_2 = os.getenv("OPENROUTER_API_KEY_FALLBACK_2")
 OPENROUTER_API_KEY_FALLBACK_3 = os.getenv("OPENROUTER_API_KEY_FALLBACK_3")
 OPENROUTER_API_KEY_FALLBACK_4 = os.getenv("OPENROUTER_API_KEY_FALLBACK_4")
 OPENROUTER_API_KEY_FALLBACK_5 = os.getenv("OPENROUTER_API_KEY_FALLBACK_5")
+
 
 # настройки API Ollama (локальная модель)
 OLLAMA_API_BASE_URL = os.getenv("OLLAMA_API_BASE_URL")
@@ -36,3 +38,10 @@ OPENROUTER_APIS = []
 #     OPENROUTER_APIS.append((OPENROUTER_API_KEY_FALLBACK_5, OPENROUTER_API_BASE_URL, OPENROUTER_MODEL))
 if OLLAMA_API_KEY:
     OPENROUTER_APIS.append((OLLAMA_API_KEY, OLLAMA_API_BASE_URL, OLLAMA_MODEL))
+
+
+# Настройки arxiv
+ARXIV_API_URL = 'http://export.arxiv.org/api/query'  # базовый URL для запросов к arXiv API
+ARXIV_API_RATE_LIMIT_SEC = 3.0  # документация arxiv просит делать не чаще 1 запроса в 3 секунды
+CACHE_FILE = 'cache/arxiv_cache.json'  # файл для кэширования результатов запросов к arXiv
+CACHE_ARXIV_TTL = 24  # время, через которое будет обновляться кэш обращений к arxiv
