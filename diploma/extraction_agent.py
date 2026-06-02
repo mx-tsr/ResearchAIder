@@ -365,6 +365,19 @@ extraction_prompt = """
 - implicit_gaps: Любые пробелы в исследованиях, которые неявно видны из текста, даже если авторы их не выделяют
 
 Отвечай только объектом JSON и на русском языке, без дополнительного текста, исключай любые кавычки - это ломает json. Объект JSON выделяется таким блоком: ```json  ```
+ОТВЕЧАЙ СТРОГО В JSON ФОРМАТЕ:
+{{
+    "title": "...",
+    "problem": "...",
+    "compared_baselines": "...",
+    "formulas": "...",
+    "results": "...",
+    "limitations": "...",
+    "novelty": "...",
+    "key_findings": "...",
+    "open_questions": "...",
+    "implicit_gaps": "..."
+}}
 
 Текст статьи:
 === НАЧАЛО ТЕКСТА СТАТЬИ ===
@@ -378,16 +391,18 @@ extraction_quality_check_prompt = """
 Оцени извлеченную информацию из статьи. Проверьте точность, полноту и согласованность с оригинальным текстом.
 При необходимости внеси улучшения в извлеченную информацию, которые повысят её точность и полноту в соответсвии с текстом статьи. Если информация представлена полностью, напиши только "ПРИНЯТО". В противном случае, предоставь улучшенную извлеченную информацию в формате JSON:
 
-- title: Название статьи
-- problem: Главная проблема или исследовательский вопрос
-- compared_baselines: Какие методы или работы сравниваются в статье и как они соотносятся с предлагаемым подходом и между собой. 
-- formulas: Если есть, описание используемого математического аппарата, формул, их представление и использование, но пиши формулы не в формате latex - это ломает json.
-- results: Ключевые результаты или открытия, полученные метрики
-- limitations: Любые ограничения, упомянутые в статье
-- novelty: Что новое или уникальное в этой работе
-- key_findings: 1-2 предложения, резюмирующие основные результаты
-- open_questions: Нерешенные вопросы или будущая работа, упомянутая в статье
-- implicit_gaps: Любые пробелы в исследованиях, которые неявно видны из текста, даже если авторы их не выделяют
+{{
+    "title": "...",
+    "problem": "...",
+    "compared_baselines": "...",
+    "formulas": "...",
+    "results": "...",
+    "limitations": "...",
+    "novelty": "...",
+    "key_findings": "...",
+    "open_questions": "...",
+    "implicit_gaps": "..."
+}}
 
 Отвечай либо "ПРИНЯТО", либо исправленным JSON.
 
@@ -405,6 +420,18 @@ extraction_quality_check_prompt = """
     # Тестирую полный цикл поиска статей, скачивания и извлечения
     # from search_agent import get_set_number_of_papers
     # selected_papers = get_set_number_of_papers(topic=user_topic, num_of_selected_papers=10, total_num_of_papers=70, num_of_expanded_queries=7, papers_per_query=10, store_path='logs/arxiv_search_log.json')
+    # selected_papers = [
+    #         ArxivPaper('2505.13400v1', None, None, None, None, None, None, None, None),
+    #         ArxivPaper('2512.13930v1', None, None, None, None, None, None, None, None),
+    #         ArxivPaper('2508.19383v1', None, None, None, None, None, None, None, None),
+    #         ArxivPaper('2511.07262v2', None, None, None, None, None, None, None, None),
+    #         ArxivPaper('2505.15047v4', None, None, None, None, None, None, None, None),
+    #         ArxivPaper('2508.05666v1', None, None, None, None, None, None, None, None),
+    #         ArxivPaper('2502.06472v2', None, None, None, None, None, None, None, None),
+    #         ArxivPaper('2601.03794v1', None, None, None, None, None, None, None, None),
+    #         ArxivPaper('2509.19326v1', None, None, None, None, None, None, None, None),
+    #         ArxivPaper('2011.01103v1', None, None, None, None, None, None, None, None),
+    #     ]
     # extracted_info_from_papers = download_and_extract_arxiv_papers(selected_papers, pdf_dir='pdfs', txt_dir='txts', extracted_info_dir='extracted_info')
     
     # Тестирую удаление ненужной информации из пдф

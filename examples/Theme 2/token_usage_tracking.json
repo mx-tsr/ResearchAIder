@@ -1,0 +1,47 @@
+{
+  "experiment": "Token Usage Tracking",
+  "timestamp": "2026-05-15T20:47:16.708752",
+  "topics": [
+    {
+      "topic": "agentic systems of science automation for searching and initial analysis of papers",
+      "prompt_tokens_total": 509622,
+      "completion_tokens_total": 101755,
+      "tokens_total": 611377,
+      "prompt_completion_sum": 611377,
+      "total_calls": 54,
+      "token_usage_by_stage": {
+        "search_agent": {
+          "prompt_tokens": 8026,
+          "completion_tokens": 2274,
+          "total_tokens": 10300,
+          "calls": 2
+        },
+        "extraction_agent": {
+          "prompt_tokens": 314154,
+          "completion_tokens": 22561,
+          "total_tokens": 336715,
+          "calls": 19
+        },
+        "analysis_agent": {
+          "prompt_tokens": 48346,
+          "completion_tokens": 26785,
+          "total_tokens": 75131,
+          "calls": 9
+        },
+        "writeup_agent": {
+          "prompt_tokens": 139096,
+          "completion_tokens": 50135,
+          "total_tokens": 189231,
+          "calls": 24
+        },
+        "total": {
+          "prompt_tokens": 509622,
+          "completion_tokens": 101755,
+          "total_tokens": 611377,
+          "calls": 54
+        }
+      },
+      "recorded_at": "2026-05-15T20:47:16.708774"
+    }
+  ]
+}

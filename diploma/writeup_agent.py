@@ -160,29 +160,7 @@ def generate_final_review(topic, group_analyses, num_iterations=3):
         full_review = new_full_review
     # Если не удалось извлечь улучшенный текст, используем текущий full_review
     
-    return full_review  
-
-
-def split_review_into_sections(review_text):
-    sections = []
-    current_header = None
-    current_lines = []
-
-    for line in review_text.splitlines():
-        if line.startswith('# '):
-            if current_header is not None:
-                sections.append((current_header, '\n'.join(current_lines).strip()))
-            current_header = line.strip()
-            current_lines = []
-        else:
-            current_lines.append(line)
-
-    if current_header is not None:
-        sections.append((current_header, '\n'.join(current_lines).strip()))
-    elif review_text.strip():
-        sections.append(('# Review', review_text.strip()))
-
-    return sections
+    return full_review, final_sections
 
 
 def add_citations_to_section(topic, section_header, section_body, papers_info_text, num_iterations=3):
@@ -231,7 +209,7 @@ def add_citations_to_section(topic, section_header, section_body, papers_info_te
     return section_text
 
 
-def add_citations_to_review(topic, review_text, extracted_info_from_papers, num_iterations=3):
+def add_citations_to_review(topic, review_text, review_sections, extracted_info_from_papers, num_iterations=3):
     """
     Добавляет ссылки на статьи в готовый обзор по разделам
     """
@@ -242,10 +220,9 @@ def add_citations_to_review(topic, review_text, extracted_info_from_papers, num_
         )
     papers_info_text = "\n".join(papers_list)
 
-    sections = split_review_into_sections(review_text)
     updated_sections = []
 
-    for section_header, section_body in sections:
+    for section_header, section_body in review_sections.items():
         updated_section = add_citations_to_section(topic=topic, section_header=section_header, section_body=section_body, papers_info_text=papers_info_text, num_iterations=num_iterations)
         updated_sections.append(updated_section)
 
@@ -331,7 +308,7 @@ def perform_review_writeup(topic, group_analyses, extracted_info_from_papers, ou
 
     # Генерируем итоговый обзор без ссылок
     logger.info("Генерирую итоговый обзор без ссылок\n")
-    final_review_no_citations = generate_final_review(topic=topic, group_analyses=group_analyses, num_iterations=3)
+    final_review_no_citations, final_sections = generate_final_review(topic=topic, group_analyses=group_analyses, num_iterations=3)
     
     # Сохраняем обзор без ссылок
     with open(output_path / 'final_review_no_citations.txt', 'w', encoding='utf-8') as f:
@@ -339,7 +316,7 @@ def perform_review_writeup(topic, group_analyses, extracted_info_from_papers, ou
     
     # Добавляем ссылки на статьи
     logger.info("Добавляю ссылки на статьи в обзор\n")
-    final_review_with_citations = add_citations_to_review(topic=topic, review_text=final_review_no_citations, extracted_info_from_papers=extracted_info_from_papers, num_iterations=3)
+    final_review_with_citations = add_citations_to_review(topic=topic, review_text=final_review_no_citations, review_sections=final_sections, extracted_info_from_papers=extracted_info_from_papers, num_iterations=3)
     
     # Сохраняем итоговый обзор со ссылками
     with open(output_path / 'final_review_with_citations.txt', 'w', encoding='utf-8') as f:
@@ -372,7 +349,8 @@ generate_section_prompt = """
 - Сравнивай подходы между группами.
 - НЕ добавляй ссылки на статьи - они будут добавлены отдельно.
 - Учитывай противоречия и консенсус.
-- Раздел уровня обзорной публикации.
+- Раздел на уровне обзорной публикации.
+- Текст должен быть связным, логичным, с плавными переходами между идеями и абзацами, без излишнего выделения частей как "синтез" или "сравнение" - эти подводки должны быть в тексте
 - Пиши ТОЛЬКО ЭТОТ РАЗДЕЛ, БЕЗ ВЫВОДОВ К НЕМУ.
 """
 
@@ -455,13 +433,12 @@ RESPONSE:
 section_citation_prompt = """
 Ты — агент, добавляющий ссылки на статьи в один раздел обзорной статьи по теме "{topic}".
 
-Раздел:
-=== НАЧАЛО ТЕКСТА РАЗДЕЛА ДАННЫХ ===
+Ниже приведен текст раздела обзора:
+=== НАЧАЛО ТЕКСТА РАЗДЕЛА ===
 {section_text}
-=== КОНЕЦ ТЕКСТА РАЗДЕЛА ДАННЫХ ===
+=== КОНЕЦ ТЕКСТА РАЗДЕЛА ===
 
 Ниже справочные данные о статьях. Это контекст для анализа, НЕ копируй этот текст дословно в обзор. Используй его только как источник фактов.
-
 === НАЧАЛО СПРАВОЧНЫХ ДАННЫХ ===
 {papers_info}
 === КОНЕЦ СПРАВОЧНЫХ ДАННЫХ ===
@@ -476,6 +453,7 @@ section_citation_prompt = """
 - Сохрани заголовок раздела в начале.
 - Если ссылки не нужны, оставь раздел без изменений. 
 - Писать ТОЛЬКО на русском, кроме названий статей, на которые ссылаешься и терминов. Предложения на английском запрещены. 
+- не пиши в RESPONSE текст выделенный знаками "=== <текст> ===" - это лишь вспомогательные маркеры для выделения блоков.
 
 Отвечай строго в формате:
 
@@ -487,7 +465,7 @@ RESPONSE:
 <тот же раздел с добавленными ссылками>
 ```
 
-НЕ ПИШИ ссылки там, где нет прямых отсылок к работам, НЕ вставляй бездумно ссылки. НЕ пиши содержание из списка доступных статей.
+НЕ ПИШИ ссылки там, где нет прямых отсылок к работам, НЕ вставляй бездумно ссылки. НЕ пиши содержание из списка доступных статей. УДАЛИ из текста любые метки вида "=== <текст> ===". 
 """
 
 
@@ -597,7 +575,7 @@ RESPONSE:
 
 
 if __name__ == "__main__":
-    test_topic = 'multiagent systems of science automation'
+    test_topic = 'agentic systems of science automation for searching and initial analysis of papers'
     from utils import load_extracted_info
     from search_agent import get_set_number_of_papers
     import json

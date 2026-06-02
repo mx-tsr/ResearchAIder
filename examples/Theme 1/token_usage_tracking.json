@@ -1,0 +1,75 @@
+{
+  "experiment": "Token Usage Tracking",
+  "timestamp": "2026-05-07T13:13:13.655399",
+  "topics": [
+    {
+      "topic": "agentic systems of science automation for searching and initial analysis of papers",
+      "total_tokens": 689035,
+      "token_usage_by_stage": {
+        "search_agent": {
+          "tokens": 9606,
+          "calls": 2
+        },
+        "extraction_agent": {
+          "tokens": 319281,
+          "calls": 20
+        },
+        "analysis_agent": {
+          "tokens": 71308,
+          "calls": 9
+        },
+        "writeup_agent": {
+          "tokens": 288840,
+          "calls": 38
+        }
+      },
+      "recorded_at": "2026-05-07T13:13:13.655436"
+    },
+    {
+      "topic": "Approximation algorithms for the generalized travelling salesman problem",
+      "total_tokens": 552841,
+      "token_usage_by_stage": {
+        "search_agent": {
+          "tokens": 0,
+          "calls": 0
+        },
+        "extraction_agent": {
+          "tokens": 305113,
+          "calls": 15
+        },
+        "analysis_agent": {
+          "tokens": 50402,
+          "calls": 9
+        },
+        "writeup_agent": {
+          "tokens": 197326,
+          "calls": 33
+        }
+      },
+      "recorded_at": "2026-05-07T13:53:47.881539"
+    },
+    {
+      "topic": "Robustness of Large Language Models in Medical Question Answering",
+      "total_tokens": 665577,
+      "token_usage_by_stage": {
+        "search_agent": {
+          "tokens": 0,
+          "calls": 0
+        },
+        "extraction_agent": {
+          "tokens": 289990,
+          "calls": 20
+        },
+        "analysis_agent": {
+          "tokens": 70989,
+          "calls": 9
+        },
+        "writeup_agent": {
+          "tokens": 304598,
+          "calls": 39
+        }
+      },
+      "recorded_at": "2026-05-07T14:35:56.469758"
+    }
+  ]
+}

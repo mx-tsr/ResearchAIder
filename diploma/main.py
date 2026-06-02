@@ -38,6 +38,7 @@ def write_review(topic, abstract, num_of_selected_papers=10, total_num_of_papers
 if __name__ == "__main__":
     user_topic = input('Введите тему для проведения исследования (тему укажите на английском): ').strip()
     user_abstract = input('Введите аннотацию для проведения исследования (при желании, иначе - оставьте пустым): ').strip()
+    input('Если вы желаете использовать локальные PDF файлы стаатей, то поместите их в папку input_papers (до 10 штук). Нажмите Enter для продолжения...')
 
     if not user_topic:
         logger.error('Тема не задана, завершение\n')

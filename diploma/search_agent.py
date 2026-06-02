@@ -31,6 +31,7 @@ class ArxivPaper:
     - doi: Optional[str] - DOI статьи, если есть
     - pdf_url: str - URL для скачивания PDF статьи
     - source_url: str - URL страницы статьи на arXiv
+    - local_pdf_path: Optional[str] - путь к локальному PDF файлу статьи, если он был загружен из папки input_papers
     '''
     arxiv_id: str
     title: str
@@ -256,6 +257,9 @@ def arxiv_backoff_handler(details):
 
 @backoff.on_exception(backoff.expo, requests.exceptions.HTTPError, max_time=90, raise_on_giveup=False, logger=None, on_backoff=arxiv_backoff_handler)
 def fetch_arxiv_response(params):
+    '''
+    Делает запрос к arXiv API
+    '''
     response = requests.get(ARXIV_API_URL, params=params)
     if response.status_code == 429:
         logger.error(f'arXiv API вернуло 429 Too Many Requests')
@@ -338,7 +342,7 @@ def get_set_number_of_papers(topic, abstract='', num_of_selected_papers=10, tota
         cached_time = datetime.fromtimestamp(cache[topic_hash]['timestamp'])
         if now - cached_time < timedelta(hours=CACHE_ARXIV_TTL):
             selected_papers = [arxiv_paper_from_dict(p) for p in cache[topic_hash]['selected_papers']]
-            logger.info(f'Найден кэш для темы, полученный в течение последних {CACHE_ARXIV_TTL} часов, возвращаю его:\n {[p.arxiv_id for p in selected_papers][:1]} ...\n')
+            logger.info(f'Найден кэш для темы, полученный в течение последних {CACHE_ARXIV_TTL} часов, возвращаю его:\n {[p.arxiv_id for p in selected_papers]} \n')
             
             # Проверить локальные статьи из кэша, если они были выбраны, но файлы не существуют
             valid_selected = []

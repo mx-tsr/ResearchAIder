@@ -92,7 +92,7 @@ def load_extracted_info(papers, extracted_info_dir='extracted_info'):
         # Проверяем наличие всех обязательных полей
         missing_fields = []
         for field in required_fields:
-            if field not in info or not info[field]:
+            if field not in info:
                 missing_fields.append(field)
         
         if missing_fields:

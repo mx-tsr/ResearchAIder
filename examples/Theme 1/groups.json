@@ -1,0 +1,20 @@
+{
+  "Adversarial Robustness and Attacks": [
+    "2406.06573v2",
+    "2406.12259v3",
+    "2511.19257v1",
+    "2505.02971v1",
+    "2604.17318v1"
+  ],
+  "Trustworthiness and Evaluation Frameworks": [
+    "2506.03659v2",
+    "2502.15871v2"
+  ],
+  "Hallucination and Error Mitigation": [
+    "2505.00008v2"
+  ],
+  "Uncertainty and Contextual Robustness": [
+    "2510.12255v1",
+    "2601.17284v1"
+  ]
+}

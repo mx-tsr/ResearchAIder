@@ -117,32 +117,39 @@ def generate_group_analysis(extracted_info_from_papers, group_name, paper_ids, t
                 stage='analysis_agent'
             )
             analysis = response
-        else:
-            # Итеративная проверка и улучшение
-            if analysis is None:
-                logger.error(f'Первичная генерация анализа группы {group_name} вернула пустой текст\n')
-                continue
-            
-            reflection_prompt = group_analysis_reflection_prompt.format(
-                group_name=group_name,
-                analysis=analysis,
-                group_papers_text=group_papers_text                
-            )
-            
-            response, msg_history = get_response_from_llm(
-                msg=reflection_prompt,
-                print_debug=False,
-                msg_history=msg_history,
-                rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC,
-                stage='analysis_agent'
-            )
-            
-            analysis = extract_response_block(response)
+            continue
 
-            # Если анализ удовлетворил, то извлекаем анализ из блока RESPONSE
+        # Итеративная проверка и улучшение
+        if analysis is None:
+            logger.error(f'Первичная генерация анализа группы {group_name} вернула пустой текст\n')
+            continue
+        
+        reflection_prompt = group_analysis_reflection_prompt.format(
+            group_name=group_name,
+            analysis=analysis,
+            group_papers_text=group_papers_text                
+        )
+        
+        response, msg_history = get_response_from_llm(
+            msg=reflection_prompt,
+            print_debug=False,
+            msg_history=msg_history,
+            rate_limit=OPENROUTER_API_EXTRACT_RATE_LIMIT_SEC,
+            stage='analysis_agent'
+        )
+        
+        new_analysis = extract_response_block(response)
+        if new_analysis and new_analysis.strip():
+            analysis = new_analysis
+            
+            # Если анализ удовлетворил, то выходим досрочно
             if "I am done" in response:
                 break
-    
+        else:
+            logger.warning(
+                f"Не удалось извлечь блок RESPONSE из ответа при проверке анализа группы '{group_name}'. "
+                f"Использую предыдущий текст анализа как резервный вариант. Ответ модели:\n{response}\n"
+            )
     return analysis
 
 
@@ -179,6 +186,9 @@ def perform_groups_analysis(topic, papers, extracted_info_dir='extracted_info', 
         else:
             logger.info(f"Генерирую анализ для группы '{group_name}': ({len(paper_ids)} статей)\n")
             analysis = generate_group_analysis(papers_info, group_name, paper_ids, topic, num_iterations=3)
+            if analysis is None:
+                logger.error(f"Анализ для группы '{group_name}' не был получен, сохраняю пустую строку.")
+                analysis = ''
             # Сохраняем анализ группы
             with open(analysis_file, 'w', encoding='utf-8') as f:
                 f.write(analysis)
@@ -300,7 +310,7 @@ group_analysis_reflection_prompt = """
 4. Выявлены ли пробелы исследований.
 5. Достаточно ли качественный это промежуточный артефакт для итогового обзора.
 
-Отвечай в формате:
+Отвечай строго в формате:
 
 THOUGHT:
 <твои размышления об анализе>

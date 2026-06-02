@@ -1,6 +1,7 @@
 import re
 import time
 import backoff
+from json import JSONDecodeError
 from openai import OpenAI, RateLimitError, APITimeoutError, APIError
 
 from config import OPENROUTER_APIS, OPENROUTER_API_RATE_LIMIT_SEC
@@ -83,6 +84,19 @@ def _extract_usage_from_response(response):
     return usage
 
 
+def _safe_extract_content(response):
+    '''
+    Безопасно получает текст из ответа модели, если структура ответа неожиданная.
+    '''
+    if response is None:
+        return ''
+
+    try:
+        return response.choices[0].message.content or ''
+    except (AttributeError, IndexError, TypeError):
+        return ''
+
+
 @backoff.on_exception(backoff.expo, (RateLimitError, APITimeoutError, APIError), max_time=90, raise_on_giveup=False, logger=None, on_backoff=backoff_handler)
 def get_response_from_llm(
         msg,
@@ -92,6 +106,7 @@ def get_response_from_llm(
         rate_limit=OPENROUTER_API_RATE_LIMIT_SEC,
         return_usage=False,
         stage=None,
+        max_attempts=2,
 ):
     '''
     Основная функция для получения ответа от LLM. Принимает сообщение от пользователя, историю сообщений, температуру и rate limit. 
@@ -109,18 +124,43 @@ def get_response_from_llm(
         if API_DAILY_LIMIT_EXHAUSTED[api_idx]:
             continue
 
-        try:
-            response = call_llm_model(
-                api_key, 
-                api_url, 
-                api_model, 
-                new_msg_history, 
-                temperature
-            )
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = call_llm_model(
+                    api_key,
+                    api_url,
+                    api_model,
+                    new_msg_history,
+                    temperature
+                )
+            except JSONDecodeError as e:
+                logger.error(f"Ошибка разбора JSON-ответа от API {api_url}: {e}")
+                last_error = e
+                if attempt < max_attempts:
+                    logger.info(f"Повторная попытка запроса к API {api_url} ({attempt+1}/{max_attempts})")
+                    time.sleep(rate_limit)
+                    continue
+                break
+            except (RateLimitError, APITimeoutError, APIError):
+                raise
+            except Exception as e:
+                logger.error(f"Непредвиденная ошибка при вызове API {api_url}: {e}")
+                last_error = e
+                if attempt < max_attempts:
+                    time.sleep(rate_limit)
+                    continue
+                break
 
-            content = response.choices[0].message.content if response is not None else ''
-            if content:
-                content = clean_text(content)
+            content = _safe_extract_content(response)
+            if not content.strip():
+                logger.warning(f"Пустой или невалидный ответ от LLM (api={api_url}, model={api_model}) на попытке {attempt}/{max_attempts}")
+                last_error = RuntimeError(f"Empty response from {api_url} on attempt {attempt}")
+                if attempt < max_attempts:
+                    time.sleep(rate_limit)
+                    continue
+                break
+
+            content = clean_text(content)
             new_msg_history = new_msg_history + [{"role": "assistant", "content": content}]
 
             usage = _extract_usage_from_response(response)
@@ -145,36 +185,13 @@ def get_response_from_llm(
                 return content, new_msg_history, usage
             return content, new_msg_history
         
-        except RateLimitError as e:
-            logger.error(f"Rate limit 429 для API {api_url}: {e}\n")
-            last_error = e
-
-            if "Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day" in str(e):
-                API_DAILY_LIMIT_EXHAUSTED[api_idx] = True
-                logger.info(f"API #{api_idx+1} исчерпал дневной лимит\n")
-                continue
-            else:
-                # Другие RateLimitError обрабатываются через backoff
-                raise
-
-        except APITimeoutError as e:
-            logger.error(f"API timeout для API {api_idx} {api_url}: {e}\n")
-            last_error = e
-            API_DAILY_LIMIT_EXHAUSTED[api_idx] = True
-            raise
-
-        except APIError as e:
-            logger.error(f"API error для API {api_idx} {api_url}: {e}\n")
-            if "401" in str(e) or "Unauthorized" in str(e):
-                logger.error(f"Проверьте API #{api_idx} в .env\n")
-            elif "404" in str(e):
-                logger.error(f"Модель '{api_model}' не найдена\n")
-            last_error = e
-            API_DAILY_LIMIT_EXHAUSTED[api_idx] = True
-            raise
+        logger.info(f"Переход к следующему API после неудачных попыток с {api_url}")
+        continue
 
     if last_error:
-        raise last_error
+        if isinstance(last_error, (RateLimitError, APITimeoutError, APIError)):
+            raise last_error
+        raise RuntimeError("Не удалось получить валидный ответ от LLM после нескольких попыток") from last_error
 
     logger.error("Ни один LLM API не был вызван\n")
     raise RuntimeError("Ни один LLM API не был вызван\n")
